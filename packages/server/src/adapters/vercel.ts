@@ -55,7 +55,8 @@ export function chatcopsVercelHandler(config: ChatCopsServerConfig) {
             send(`data: ${chunk}\n\n`);
           }
           send('data: [DONE]\n\n');
-        } catch {
+        } catch (err) {
+          if (!abort.signal.aborted) console.error('[chatcops] Unhandled error while handling chat:', err);
           send(`data: ${JSON.stringify({ error: 'internal_error' })}\n\n`);
         } finally {
           if (!abort.signal.aborted) controller.close();

@@ -61,6 +61,7 @@ export function chatcopsMiddleware(config: ChatCopsServerConfig) {
       if (!abort.signal.aborted) res.write('data: [DONE]\n\n');
     } catch (err) {
       if (!abort.signal.aborted) {
+        console.error('[chatcops] Unhandled error while handling chat:', err);
         res.write(`data: ${JSON.stringify({ error: 'internal_error' })}\n\n`);
       }
     } finally {

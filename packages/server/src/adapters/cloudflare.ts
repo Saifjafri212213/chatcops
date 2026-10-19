@@ -72,7 +72,8 @@ export function chatcopsCloudflareHandler(config: ChatCopsServerConfig) {
           if (!(await send(`data: ${chunk}\n\n`))) break;
         }
         await send('data: [DONE]\n\n');
-      } catch {
+      } catch (err) {
+        if (!abort.signal.aborted) console.error('[chatcops] Unhandled error while handling chat:', err);
         await send(`data: ${JSON.stringify({ error: 'internal_error' })}\n\n`);
       } finally {
         if (abort.signal.aborted) {
