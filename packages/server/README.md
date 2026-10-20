@@ -153,7 +153,7 @@ const result = limiter.check('127.0.0.1');
 
 ## Webhooks
 
-HMAC-SHA256 signed, with exponential backoff retries (up to 3 attempts).
+HMAC-SHA256 signed, with retries (up to 3 attempts).
 
 ```typescript
 import { WebhookDispatcher } from '@chatcops/server';
@@ -165,7 +165,15 @@ const dispatcher = new WebhookDispatcher([
 await dispatcher.dispatch('lead:captured', { email: 'user@example.com' });
 ```
 
-Signature sent via `X-ChatCops-Signature` header.
+Each delivery carries `X-ChatCops-Signature: t=<seconds>,v1=<hmac>`, signed over the raw body. Check it on the receiving side with `verifyWebhook`:
+
+```typescript
+import { verifyWebhook } from '@chatcops/server';
+
+const valid = await verifyWebhook({ body: rawBody, signature: request.headers.get('X-ChatCops-Signature'), secret: 'my-secret' });
+```
+
+The body is `{ id, type, created, data }`; `id` stays the same across retries. 429 and 5xx responses are retried, redirects aren't followed, and URLs must be https on a public host unless the webhook sets `allowPrivateNetwork: true`. See the server setup docs for the full format.
 
 ## Custom Conversation Store
 
