@@ -123,6 +123,7 @@ export default defineConfig({
           label: 'Server',
           items: [
             { label: 'Setup', slug: 'server/setup' },
+            { label: 'Protocol', slug: 'server/protocol' },
             { label: 'Storage', slug: 'server/storage' },
             { label: 'Security', slug: 'server/security' },
             { label: 'Express', slug: 'server/express' },
