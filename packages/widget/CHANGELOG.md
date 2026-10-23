@@ -1,5 +1,24 @@
 # @chatcops/widget
 
+## 0.6.0
+
+### Minor Changes
+
+- 545963f: Cloudflare Turnstile when a session is issued. With `turnstile: { secretKey }` on the server, `/session` checks a Turnstile token with Cloudflare before signing (401 `turnstile_failed` otherwise, 503 when Cloudflare can't be reached), and a refresh with the previous token skips it. The widget's `turnstileSiteKey` (`data-turnstile-site-key`) loads Cloudflare's script only when it first needs a session and renders the challenge in the page, outside the shadow root.
+- 5b31899: Clearer messages when a reply can't happen. The widget now reads the server's reason and says it: too many messages, with the wait in seconds when the server sends one; the conversation or the day's budget used up; the assistant unavailable (the provider couldn't be set up); or the reply cut off. Each one is a new `strings` key (`errorRateLimitWait`, `errorBudget`, `errorBudgetDaily`, `errorUnavailable`, `errorCutOff`). The script tag bundle's size budget goes from 14 kB to 14.5 kB (18 kB for ESM) to fit them.
+- 79a2253: Session tokens. When the server has them on and a chat request gets a 401, the widget gets a token from `<apiUrl>/session`, keeps it in `localStorage`, and sends the request again with `Authorization: Bearer`. The saved token lets the server resume the conversation after a reload, and the widget moves to a new conversation id when the server gives one. Servers without session tokens see no change.
+- 4aa886d: The widget asks for protocol v1 (`protocol: 1` in the request body) and reads its typed parts. Servers before 0.6 ignore the field and answer in the old format, which the widget still reads. With a v1 server, replies keep the id the server saved them under, so regenerate names the exact reply to replace, and a stream that ends without its `finish` part shows "cut off" with Retry instead of passing as a finished answer. Unknown part types are ignored.
+
+### Patch Changes
+
+- e13dfc9: Assistant replies now carry `data-ai-generated="true"`, so scripts, extensions and CSS can tell model-written text apart. User messages and the welcome message don't get it.
+- 8e3e79e: Add `homepage`, `bugs`, `keywords` and `engines` (`node >=22`) to the package metadata, so npm links to the docs and the issue tracker. Core and server are marked `sideEffects: false` for tree shaking. The widget isn't, because importing it starts the widget.
+- f9e13f1: Pre-chat form answers are stored with the conversation from its first message, and later requests can't change them, so a visitor can't rewrite their details mid-conversation. The new `preChatFields` option keeps only the listed fields and drops anything else a request sends. Once a 0.6 server has answered, the widget stops sending the answers with every message.
+- 5ad6b1a: A reply whose connection is cut before the server's final `[DONE]` (a proxy timeout or a server crash, for example) now shows a network error and a Retry button under the text received so far. Before, it looked like a finished answer.
+- 43d3d57: The script tag bundle is 37 bytes smaller (gzipped): the inline icons no longer repeat an `xmlns` attribute, and the stylesheet drops the default `ease` keyword from its transitions. The widget looks and behaves the same.
+- 785a00a: Validate stored conversations before restoring them. Invalid top-level structures and malformed JSON are cleared from storage, and messages without a valid user or assistant role and string content are filtered out.
+- 2104c3b: Remove the `require` export condition. It pointed at the script tag bundle, which never sets `module.exports`, so `require('@chatcops/widget')` returned an empty object. CommonJS code now gets a clear `ERR_PACKAGE_PATH_NOT_EXPORTED` error; use `import` instead. The `main` field and the `dist/chatcops.min.js` file that the CDN snippet loads are unchanged. The build also always writes the type declarations now, even after an earlier local build.
+
 ## 0.5.0
 
 ### Minor Changes
