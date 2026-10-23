@@ -11,6 +11,17 @@ import { PreChatForm } from './dom/prechat-form.js';
 import type { WidgetChatRequest } from './api/types.js';
 import type { MessageData, MessageErrorType } from './dom/messages.js';
 
+/** The locale string for each kind of failed reply. */
+const ERROR_MESSAGES: Partial<Record<MessageErrorType, keyof WidgetLocaleStrings>> = {
+  network: 'errorNetwork',
+  timeout: 'errorNetwork',
+  provider_error: 'errorGeneric',
+  budget: 'errorBudget',
+  budget_daily: 'errorBudgetDaily',
+  unavailable: 'errorUnavailable',
+  cut_off: 'errorCutOff',
+};
+
 export interface PreChatField {
   name: string;
   type: 'text' | 'email' | 'select' | 'textarea';
@@ -32,6 +43,11 @@ export interface WidgetConfig {
   apiUrl: string;
   /** Request/stream inactivity timeout in milliseconds. Defaults to 30000. */
   timeout?: number;
+  /**
+   * Your Cloudflare Turnstile site key, when the server has `turnstile` set.
+   * Cloudflare's script loads only when the widget first needs a session.
+   */
+  turnstileSiteKey?: string;
   mode?: 'popup' | 'inline';
   /**
    * Names this widget's saved conversation. Set a different one on each widget
@@ -84,7 +100,7 @@ export type WidgetEventType =
   | 'preChatSubmit';
 export type WidgetEventHandler = (...args: unknown[]) => void;
 type SendRequestOptions = {
-  regenerate?: boolean;
+  regenerate?: boolean | { assistantMessageId: string };
   userMessageId?: string;
 };
 
@@ -104,6 +120,8 @@ export class Widget {
   private messages: MessageData[] = [];
   private userData?: Record<string, string>;
   private isStreaming = false;
+  /** Set once the server answers in protocol v1 (0.6 and later). */
+  private v1 = false;
   private destroyed = false;
   private abortController?: AbortController;
   private retryRequests = new Map<string, SendRequestOptions>();
@@ -117,7 +135,7 @@ export class Widget {
 
   constructor(config: WidgetConfig) {
     this.config = config;
-    this.client = new ChatClient({ apiUrl: config.apiUrl, timeout: config.timeout });
+    this.client = new ChatClient({ apiUrl: config.apiUrl, timeout: config.timeout, turnstileSiteKey: config.turnstileSiteKey });
     this.namespace = claimNamespace(
       config.siteId,
       config.mode ?? 'popup',
@@ -311,7 +329,9 @@ export class Widget {
 
   private emit(event: WidgetEventType, ...args: unknown[]): void {
     if (this.destroyed) return;
-    this.eventHandlers.get(event)?.forEach((h) => h(...args));
+    this.eventHandlers.get(event)?.forEach((h) => {
+      h(...args);
+    });
   }
 
   private isPreChatCompleted(): boolean {
@@ -441,7 +461,8 @@ export class Widget {
     this.messages = this.messages.filter((message) => message.id !== assistantMessageId);
 
     await this.sendToServer(userMessage.content, {
-      regenerate: true,
+      // A v1 server saved the reply under this id; a 0.5 server only knows `true`.
+      regenerate: this.v1 ? { assistantMessageId } : true,
       userMessageId: userMessage.id,
     });
   }
@@ -476,7 +497,7 @@ export class Widget {
         if (this.destroyed) break;
         if (chunk.error) {
           const errorType = this.resolveErrorType(chunk.error);
-          this.markFailed(assistantMsg, this.getErrorMessage(errorType));
+          this.markFailed(assistantMsg, this.getErrorMessage(errorType, chunk.retryAfterMs));
           assistantMsg.errorType = errorType;
           hasError = true;
 
@@ -503,6 +524,14 @@ export class Widget {
         if (chunk.done) {
           requestCompleted = true;
           break;
+        }
+
+        if (chunk.conversationId) this.conversationId = chunk.conversationId;
+
+        // The reply is saved under the server's id, so regenerate can name it.
+        if (chunk.messageId) {
+          assistantMsg.id = chunk.messageId;
+          this.v1 = true;
         }
 
         if (chunk.leadCaptured) {
@@ -589,7 +618,8 @@ export class Widget {
       ? { url: window.location.href, title: document.title }
       : undefined;
 
-    const includeUserData = Boolean(this.config.preChatForm?.enabled && this.userData);
+    // A v1 server keeps the answers from the first message; 0.5 servers need them every time.
+    const includeUserData = Boolean(this.config.preChatForm?.enabled && this.userData && !this.v1);
 
     return {
       conversationId: this.conversationId,
@@ -639,15 +669,7 @@ export class Widget {
   }
 
   private resolveErrorType(error: string): MessageErrorType {
-    switch (error) {
-      case 'rate_limit':
-      case 'network':
-      case 'provider_error':
-      case 'timeout':
-        return error;
-      default:
-        return 'provider_error';
-    }
+    return error in ERROR_MESSAGES || error === 'rate_limit' ? (error as MessageErrorType) : 'provider_error';
   }
 
   /**
@@ -663,16 +685,13 @@ export class Widget {
     }
   }
 
-  private getErrorMessage(errorType: MessageErrorType): string {
-    switch (errorType) {
-      case 'rate_limit':
-        return this.locale.errorRateLimit;
-      case 'network':
-      case 'timeout':
-        return this.locale.errorNetwork;
-      default:
-        return this.locale.errorGeneric;
+  private getErrorMessage(errorType: MessageErrorType, retryAfterMs?: number): string {
+    if (errorType === 'rate_limit') {
+      return retryAfterMs
+        ? this.locale.errorRateLimitWait.replace('{seconds}', String(Math.ceil(retryAfterMs / 1000)))
+        : this.locale.errorRateLimit;
     }
+    return this.locale[ERROR_MESSAGES[errorType] ?? 'errorGeneric'];
   }
 
   private saveHistory(): void {

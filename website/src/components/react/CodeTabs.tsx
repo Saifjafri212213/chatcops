@@ -18,7 +18,7 @@ app.all('/chat', chatcopsMiddleware({
     model: 'claude-haiku-5-5',
   },
   systemPrompt: 'You are a helpful assistant.',
-  cors: '*',
+  allowedOrigins: ['*'],
   rateLimit: { maxRequests: 30, windowMs: 60_000 },
 }));
 
@@ -37,7 +37,7 @@ export default chatcopsVercelHandler({
     apiKey: process.env.ANTHROPIC_API_KEY,
   },
   systemPrompt: 'You are a helpful assistant.',
-  cors: '*',
+  allowedOrigins: ['*'],
 });`,
   },
   {
@@ -53,7 +53,7 @@ function getHandler(env) {
       apiKey: env.ANTHROPIC_API_KEY,
     },
     systemPrompt: 'You are a helpful assistant.',
-    cors: '*',
+    allowedOrigins: ['*'],
   });
   return handler;
 }
@@ -81,7 +81,7 @@ function highlight(code: string) {
       '<span class="text-[#67e8f9]">$1</span>'
     )
     .replace(
-      /\b(provider|type|apiKey|model|systemPrompt|cors|rateLimit|maxRequests|windowMs|runtime|config)\b(?=[\s]*:)/g,
+      /\b(provider|type|apiKey|model|systemPrompt|allowedOrigins|rateLimit|maxRequests|windowMs|runtime|config)\b(?=[\s]*:)/g,
       '<span class="text-[#fbbf24]">$1</span>'
     )
     .replace(
@@ -100,6 +100,7 @@ export default function CodeTabs() {
       <div className="flex border-b border-border">
         {tabs.map((t) => (
           <button
+            type="button"
             key={t.id}
             onClick={() => setActive(t.id)}
             className={`relative px-5 py-3 text-sm font-medium transition-colors ${
@@ -130,6 +131,7 @@ export default function CodeTabs() {
             className="p-5"
           >
             <pre className="font-mono text-[13px] leading-[1.8] overflow-x-auto">
+              {/* biome-ignore lint/security/noDangerouslySetInnerHtml: syntax highlighted code */}
               <code dangerouslySetInnerHTML={{ __html: highlight(tab.code) }} />
             </pre>
           </motion.div>

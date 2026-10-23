@@ -84,6 +84,9 @@ pnpm -r build
 # Run tests
 pnpm test
 
+# Run tests with coverage, as CI does (fails if a package drops below its minimum)
+pnpm test:coverage
+
 # Typecheck
 pnpm -r typecheck
 ```
@@ -99,6 +102,7 @@ packages/
   core/     @chatcops/core (AI providers, tools, knowledge base)
   widget/   @chatcops/widget (embeddable chat UI)
   server/   @chatcops/server (server handler + adapters)
+  store-*/  conversation, counter and analytics stores, one package per backend
 website/    Marketing site + Starlight docs (Astro)
 ```
 
@@ -199,17 +203,19 @@ ANTHROPIC_API_KEY=sk-... npx tsx src/examples/express-server.ts
 
 `npx` downloads `tsx` the first time.
 
+The widget has a size budget: 14.5 kB gzipped for the script tag bundle (`dist/chatcops.min.js`) and 18 kB for the ESM build, checked in CI by `pnpm size` after a build (limits in `.size-limit.json`).
+
 ### Browser tests
 
-The unit tests run in happy-dom. The tests in `e2e/` load the built widget in a real Chromium, against a small mock server that streams canned replies, and run an axe accessibility check:
+The unit tests run in happy-dom. The tests in `e2e/` load the built widget in a real Chromium and run an axe accessibility check. `e2e/server.mjs` serves the pages and runs the real `@chatcops/server` handler, with a stand-in provider that answers by the message text (no API keys needed). A second, cross-origin server stands in for a 0.5 server:
 
 ```bash
-pnpm --filter @chatcops/widget build
+pnpm --filter @chatcops/widget --filter "@chatcops/server..." build
 pnpm exec playwright install chromium   # once
 pnpm e2e
 ```
 
-They cover starting from the script tag, streaming, Escape and the tab order, the phone layout, and accessibility. CI runs them in the `e2e` job. Add a test there when you change how the widget behaves in a browser.
+They cover starting from the script tag, streaming, Escape and the tab order, the phone layout, accessibility, a reply that fails or is cut off, a slow tool kept alive by pings, session tokens, and a chat API on another origin. CI runs them in the `e2e` job. Add a test there when you change how the widget behaves in a browser.
 
 ## Adding a new AI provider
 
@@ -219,6 +225,28 @@ They cover starting from the script tag, streaming, Escape and the tab order, th
 4. Register in the `createProvider` factory
 5. Export from `index.ts`
 6. Add tests
+
+## Writing a store package
+
+Stores live in their own packages (`packages/store-<name>`), so a Cloudflare user never installs a Postgres driver. Each one implements the interfaces in `packages/core/src/storage/types.ts`: `conversations` is required, and `counters`, `kv` and `events` are what make rate limits and analytics work across server instances. `memoryStorage()` in `packages/core/src/storage/memory.ts` is the reference.
+
+A new package needs:
+
+- `package.json` with `"private": true` until a maintainer publishes it for the first time, `"type": "module"`, an `exports` entry like `@chatcops/core`'s, `"@chatcops/core": "workspace:^"` in `peerDependencies` (and `"workspace:*"` in `devDependencies`), the database client as a peer dependency where there is one, and the `build`, `typecheck` and `test` scripts.
+- `tsconfig.json` extending `../../tsconfig.json`, like the other packages.
+- `tests/conformance.test.ts` running the shared suite, which is the contract every store has to meet:
+
+  ```ts
+  import { describe } from 'vitest';
+  import { runStorageConformance } from '@chatcops/core/testing';
+  import { redisStorage } from '../src/index.js';
+
+  const url = process.env.CHATCOPS_TEST_REDIS_URL;
+  if (url) runStorageConformance('redis', () => redisStorage({ url }));
+  else describe.skip('redis conformance (set CHATCOPS_TEST_REDIS_URL to run)', () => {});
+  ```
+
+CI runs Redis, the Upstash REST emulator and Postgres next to the tests and sets `CHATCOPS_TEST_REDIS_URL`, `CHATCOPS_TEST_UPSTASH_URL` with `CHATCOPS_TEST_UPSTASH_TOKEN`, and `CHATCOPS_TEST_POSTGRES_URL` (see `.github/workflows/ci.yml`). Locally, start the same containers with Docker and export the variables, or let those tests skip. The root `vitest.config.ts` and `pnpm publint` pick up a new package by themselves, and store packages need 90% line and 80% branch coverage, checked in CI (locally the database tests skip, so the store floor only applies there).
 
 ## Adding a new locale
 
@@ -247,9 +275,10 @@ The site runs without any secrets. Only the live chat demo on the landing page n
 OPENAI_API_KEY=sk-...
 UPSTASH_REDIS_REST_URL=https://your-endpoint.upstash.io
 UPSTASH_REDIS_REST_TOKEN=your-token-here
+VISITOR_HASH_SALT=any-long-random-string
 ```
 
-The visitor counter shows `-` without Upstash credentials. Google Analytics (`G-GLYL9J6QYX`) is hardcoded in the layout and Starlight config.
+The visitor counter shows `-` without Upstash credentials, and counts each visitor once per day only when `VISITOR_HASH_SALT` is set. Without it, every call increments the count. Google Analytics (`G-GLYL9J6QYX`) is hardcoded in the layout and Starlight config.
 
 ## Commit convention
 

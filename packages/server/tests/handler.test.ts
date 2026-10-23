@@ -1,100 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@chatcops/core', () => {
-  type ChatMessage = {
-    id: string;
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    timestamp: number;
-    metadata?: Record<string, unknown>;
-  };
-
-  type Conversation = {
-    id: string;
-    messages: ChatMessage[];
-    metadata?: Record<string, unknown>;
-    createdAt: number;
-    updatedAt: number;
-  };
-
-  class ConversationManager {
-    private readonly conversations = new Map<string, Conversation>();
-
-    async getOrCreate(id: string) {
-      const existing = this.conversations.get(id);
-      if (existing) {
-        return existing;
-      }
-
-      const now = Date.now();
-      const conversation: Conversation = {
-        id,
-        messages: [],
-        createdAt: now,
-        updatedAt: now,
-      };
-      this.conversations.set(id, conversation);
-      return conversation;
-    }
-
-    async addMessage(conversationId: string, message: ChatMessage) {
-      const conversation = await this.getOrCreate(conversationId);
-      conversation.messages.push(message);
-      conversation.updatedAt = Date.now();
-      return conversation;
-    }
-
-    async getMessages(conversationId: string) {
-      const conversation = await this.getOrCreate(conversationId);
-      return [...conversation.messages];
-    }
-
-    async removeMessage(conversationId: string, messageId: string) {
-      const conversation = await this.getOrCreate(conversationId);
-      conversation.messages = conversation.messages.filter((message) => message.id !== messageId);
-      conversation.updatedAt = Date.now();
-    }
-  }
-
-  class AnalyticsCollector {
-    private totalConversations = 0;
-    private leadsCapture = 0;
-
-    track(event: string) {
-      if (event === 'conversation:started') {
-        this.totalConversations += 1;
-      }
-
-      if (event === 'lead:captured') {
-        this.leadsCapture += 1;
-      }
-    }
-
-    getStats() {
-      return {
-        totalConversations: this.totalConversations,
-        leadsCapture: this.leadsCapture,
-      };
-    }
-  }
-
-  return {
-    createProvider: vi.fn(),
-    ConversationManager,
-    AnalyticsCollector,
-    toolToDefinition: (tool: {
-      name: string;
-      description: string;
-      parameters: Record<string, { type: 'string' | 'number' | 'boolean'; description: string; enum?: string[] }>;
-      required: string[];
-    }) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      required: tool.required,
-    }),
-  };
-});
+// Only provider creation is replaced; conversations, analytics and tool
+// validation are the real ones from core, so these tests cover the handler
+// together with what it builds on.
+vi.mock('@chatcops/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@chatcops/core')>()),
+  createProvider: vi.fn(),
+}));
 
 import { createProvider } from '@chatcops/core';
 import { chatRequestSchema } from '../src/config.js';
@@ -118,8 +30,9 @@ describe('createChatHandler', () => {
     vi.restoreAllMocks();
   });
 
-  it('cleanup function clears interval', () => {
-    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+  it('starts no timers, so it can be created at global scope on Workers', () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
 
     const { cleanup } = createChatHandler({
       provider: { type: 'claude', apiKey: 'test-key' },
@@ -127,8 +40,10 @@ describe('createChatHandler', () => {
       cors: '*',
     });
 
-    cleanup();
-    expect(clearIntervalSpy).toHaveBeenCalledOnce();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    // Still there for code written for 0.5.
+    expect(() => cleanup()).not.toThrow();
   });
 
   it('warns once when the deprecated i18n option is set', () => {
@@ -181,7 +96,7 @@ describe('createChatHandler', () => {
           input: { city: 'Boston' },
         });
 
-        yield `Forecast: ${(toolResult?.data as { forecast: string }).forecast}`;
+        yield `Forecast: ${(toolResult?.data as { forecast?: string })?.forecast}`;
       },
       async chatSync() {
         return '';
@@ -203,7 +118,10 @@ describe('createChatHandler', () => {
       events.push(JSON.parse(chunk));
     }
 
-    expect(weatherTool.execute).toHaveBeenCalledWith({ city: 'Boston' });
+    expect(weatherTool.execute).toHaveBeenCalledWith(
+      { city: 'Boston' },
+      { conversationId: 'conv-1', signal: expect.any(AbortSignal) }
+    );
     expect(events).toEqual([
       { content: 'Forecast: sunny' },
       { done: true },
@@ -363,7 +281,10 @@ describe('createChatHandler', () => {
       // Drain the stream.
     }
 
-    expect(leadTool.execute).toHaveBeenCalledWith({ email: 'lead@example.com' });
+    expect(leadTool.execute).toHaveBeenCalledWith(
+      { email: 'lead@example.com' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(getAnalytics()).toMatchObject({
       totalConversations: 1,
       leadsCapture: 1,
@@ -494,7 +415,10 @@ describe('createChatHandler', () => {
     // Advance to first chunk: tool executor returns immediately without waiting for unresolved fetch
     const firstChunk = await generator.next();
 
-    expect(leadTool.execute).toHaveBeenCalledWith({ email: 'lead@example.com' });
+    expect(leadTool.execute).toHaveBeenCalledWith(
+      { email: 'lead@example.com' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(executorResult).toEqual({
       success: true,
@@ -522,6 +446,85 @@ describe('createChatHandler', () => {
     resolveWebhookFetch(new Response('OK', { status: 200 }));
     await streamCompletionPromise;
     expect(isStreamFinished).toBe(true);
+  });
+
+  describe('when the provider fails to set up', () => {
+    const body = (n: number) => ({ conversationId: `conv-setup-${n}`, message: 'Hello' });
+
+    async function collect(generator: AsyncGenerator<string>) {
+      const events: Array<Record<string, unknown>> = [];
+      for await (const chunk of generator) events.push(JSON.parse(chunk));
+      return events;
+    }
+
+    it('handles the rejection, logs it once, and answers every request with provider_error', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on('unhandledRejection', onUnhandled);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedCreateProvider.mockRejectedValue(new Error('Unknown provider type: nope'));
+
+      try {
+        const { handleChat, cleanup } = createChatHandler({
+          provider: { type: 'claude', apiKey: 'sk-secret-key' },
+          systemPrompt: 'Test',
+        });
+
+        // Give the runtime a chance to report a rejection nobody handled.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(unhandled).toEqual([]);
+
+        for (const n of [1, 2, 3]) {
+          expect(await collect(handleChat(body(n)))).toEqual([{ error: 'provider_error' }]);
+        }
+        cleanup();
+
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(errorSpy).toHaveBeenCalledWith(
+          '[chatcops] Provider setup failed:',
+          'Unknown provider type: nope'
+        );
+        expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('sk-secret-key');
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    });
+
+    it('logs only the message, not the error object, which can carry the config', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const failure = Object.assign(new Error('Missing API key'), { config: { apiKey: 'sk-secret-key' } });
+      mockedCreateProvider.mockRejectedValue(failure);
+
+      const { cleanup } = createChatHandler({
+        provider: { type: 'claude', apiKey: 'sk-secret-key' },
+        systemPrompt: 'Test',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      cleanup();
+
+      expect(errorSpy).toHaveBeenCalledWith('[chatcops] Provider setup failed:', 'Missing API key');
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('sk-secret-key');
+    });
+
+    it('still validates requests and applies rate limits before reporting provider_error', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedCreateProvider.mockRejectedValue(new Error('setup failed'));
+
+      const { handleChat, cleanup } = createChatHandler({
+        provider: { type: 'claude', apiKey: 'k' },
+        systemPrompt: 'Test',
+        rateLimit: { maxRequests: 1, windowMs: 60_000 },
+      });
+
+      const invalid = await collect(handleChat({ conversationId: '', message: '' }, '1.2.3.4'));
+      expect(invalid).toEqual([expect.objectContaining({ error: 'Invalid request' })]);
+
+      expect(await collect(handleChat(body(1), '5.6.7.8'))).toEqual([{ error: 'provider_error' }]);
+      expect(await collect(handleChat(body(2), '5.6.7.8'))).toEqual([
+        expect.objectContaining({ error: 'rate_limit' }),
+      ]);
+      cleanup();
+    });
   });
 
   it('awaits pending webhook delivery before returning provider_error when provider throws', async () => {
@@ -589,7 +592,10 @@ describe('createChatHandler', () => {
     })();
 
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(leadTool.execute).toHaveBeenCalledWith({ email: 'lead@example.com' });
+    expect(leadTool.execute).toHaveBeenCalledWith(
+      { email: 'lead@example.com' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(executorResult).toEqual({
       success: true,
@@ -993,6 +999,12 @@ describe('chatRequestSchema', () => {
       locale: 'en',
     });
     expect(result.success).toBe(true);
+  });
+
+  it('accepts regenerate naming the reply to replace, and rejects an empty id', () => {
+    const ok = chatRequestSchema.safeParse({ conversationId: 'c', message: 'Hi', regenerate: { assistantMessageId: 'a1' } });
+    expect(ok.success && ok.data.regenerate).toEqual({ assistantMessageId: 'a1' });
+    expect(chatRequestSchema.safeParse({ conversationId: 'c', message: 'Hi', regenerate: { assistantMessageId: '' } }).success).toBe(false);
   });
 
   it('accepts regenerate metadata', () => {

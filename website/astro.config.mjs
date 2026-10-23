@@ -25,6 +25,7 @@ export default defineConfig({
       OPENAI_API_KEY: envField.string({ context: 'server', access: 'secret', optional: true }),
       UPSTASH_REDIS_REST_URL: envField.string({ context: 'server', access: 'secret', optional: true }),
       UPSTASH_REDIS_REST_TOKEN: envField.string({ context: 'server', access: 'secret', optional: true }),
+      VISITOR_HASH_SALT: envField.string({ context: 'server', access: 'secret', optional: true }),
     },
   },
   site: 'https://chat.codercops.com',
@@ -104,12 +105,14 @@ export default defineConfig({
           items: [
             { label: 'Quick Start', slug: 'getting-started/quick-start' },
             { label: 'Installation', slug: 'getting-started/installation' },
+            { label: 'Upgrading from 0.5', slug: 'getting-started/upgrading' },
           ],
         },
         {
           label: 'Widget',
           items: [
             { label: 'Configuration', slug: 'widget/configuration' },
+            { label: 'Pre-chat Form', slug: 'widget/pre-chat-form' },
             { label: 'API Reference', slug: 'widget/api' },
             { label: 'Theming', slug: 'widget/theming' },
             { label: 'Events', slug: 'widget/events' },
@@ -120,8 +123,13 @@ export default defineConfig({
           label: 'Server',
           items: [
             { label: 'Setup', slug: 'server/setup' },
+            { label: 'Protocol', slug: 'server/protocol' },
+            { label: 'Storage', slug: 'server/storage' },
+            { label: 'Security', slug: 'server/security' },
             { label: 'Express', slug: 'server/express' },
             { label: 'Vercel', slug: 'server/vercel' },
+            { label: 'Next.js, Hono, Bun, Deno', slug: 'server/fetch-runtimes' },
+            { label: 'AI SDK (useChat)', slug: 'server/ai-sdk' },
             { label: 'Cloudflare Workers', slug: 'server/cloudflare' },
           ],
         },

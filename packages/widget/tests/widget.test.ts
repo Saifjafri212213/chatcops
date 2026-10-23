@@ -40,6 +40,30 @@ describe('Widget', () => {
     vi.restoreAllMocks();
   });
 
+  it('moves to the conversation id the server gives with a session token, and saves history under it', async () => {
+    const reply = [
+      'data: {"type":"start","protocol":1,"conversationId":"server-id","messageId":"m1"}',
+      'data: {"type":"text-delta","id":"t1","delta":"Hello"}',
+      'data: {"type":"finish","reason":"stop"}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    const fetch = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('{"error":{"code":"session_required"}}', { status: 401 }))
+      .mockResolvedValueOnce(new Response('{"token":"tok","conversationId":"server-id","expiresAt":0}', { status: 200 }))
+      .mockResolvedValueOnce(new Response(reply, { status: 200 }))
+      .mockResolvedValueOnce(new Response(reply, { status: 200 }));
+    const widget = new Widget({ apiUrl: 'https://api.test/chat' });
+    widget.init();
+
+    await getInternals(widget).handleSend('Hi');
+    await getInternals(widget).handleSend('Again');
+
+    expect(JSON.parse(String(fetch.mock.calls[3][1]?.body)).conversationId).toBe('server-id');
+    expect(JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}').id).toBe('server-id');
+    widget.destroy();
+  });
+
   it('does not open after destroy when auto-open is delayed', () => {
     vi.useFakeTimers();
     const onOpen = vi.fn();
@@ -277,6 +301,101 @@ describe('Widget', () => {
     });
   });
 
+  it('marks streamed assistant replies as ai generated, but not user or welcome messages', async () => {
+    const widget = new Widget({ apiUrl: 'https://api.test/chat' });
+    widget.init();
+    getInternals(widget).showChatView();
+    let streamingBubble: HTMLElement | null = null;
+    getInternals(widget).client.sendMessage = vi.fn().mockImplementationOnce(async function* () {
+      yield { content: 'Hel' };
+      streamingBubble = getInternals(widget).shadow.querySelector('.cc-message-assistant[data-status="streaming"]');
+      yield { content: 'lo' };
+      yield { done: true };
+    });
+
+    await getInternals(widget).handleSend('Hi');
+
+    const shadow = getInternals(widget).shadow;
+    expect(streamingBubble?.dataset.aiGenerated).toBe('true');
+    expect((shadow.querySelector('.cc-message-user') as HTMLElement).dataset.aiGenerated).toBeUndefined();
+    const assistant = Array.from(shadow.querySelectorAll<HTMLElement>('.cc-message-assistant'));
+    const welcome = assistant.find((el) => el.dataset.id === 'welcome');
+    expect(welcome).toBeDefined();
+    expect(welcome?.dataset.aiGenerated).toBeUndefined();
+    expect(assistant.at(-1)?.dataset.aiGenerated).toBe('true');
+  });
+
+  it('keeps the ai generated mark on failed, retried and regenerated replies', async () => {
+    const widget = new Widget({ apiUrl: 'https://api.test/chat' });
+    widget.init();
+    getInternals(widget).client.sendMessage = vi.fn()
+      .mockImplementationOnce(async function* () {
+        yield { error: 'provider_error' };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { content: 'Recovered' };
+        yield { done: true };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { content: 'Again' };
+        yield { done: true };
+      });
+    const lastBubble = () => {
+      const bubble = Array.from(getInternals(widget).shadow.querySelectorAll<HTMLElement>('.cc-message-assistant')).at(-1);
+      if (!bubble) throw new Error('no assistant bubble');
+      return bubble;
+    };
+    const lastMessageId = () => {
+      const id = getInternals(widget).messages.at(-1)?.id;
+      if (!id) throw new Error('no message');
+      return id;
+    };
+
+    await getInternals(widget).handleSend('Hi');
+    expect(lastBubble().dataset.status).toBe('error');
+    expect(lastBubble().dataset.aiGenerated).toBe('true');
+
+    await getInternals(widget).handleRetry(lastMessageId());
+    expect(lastBubble().textContent).toContain('Recovered');
+    expect(lastBubble().dataset.aiGenerated).toBe('true');
+
+    await getInternals(widget).handleRegenerate(lastMessageId());
+    expect(lastBubble().textContent).toContain('Again');
+    expect(lastBubble().dataset.aiGenerated).toBe('true');
+  });
+
+  it.each([
+    [{ error: 'rate_limit', retryAfterMs: 41_200 }, 'rate_limit', 'Too many messages. Please try again in 42 seconds.'],
+    [{ error: 'rate_limit' }, 'rate_limit', 'Too many messages. Please wait a moment.'],
+    [{ error: 'budget' }, 'budget', 'This chat has reached its limit.'],
+    [{ error: 'budget_daily' }, 'budget_daily', 'The assistant has reached its limit for today. Please try again later.'],
+    [{ error: 'unavailable' }, 'unavailable', 'The assistant is unavailable right now. Please try again later.'],
+    [{ error: 'cut_off' }, 'cut_off', 'The reply was cut off.'],
+    [{ error: 'HTTP 502' }, 'provider_error', 'Something went wrong. Please try again.'],
+  ])('shows %o as %s with its own message', async (chunk, errorType, text) => {
+    const widget = new Widget({ apiUrl: 'https://api.test/chat' });
+    widget.init();
+    getInternals(widget).client.sendMessage = vi.fn().mockImplementationOnce(async function* () {
+      yield chunk;
+    });
+
+    await getInternals(widget).handleSend('Hi');
+
+    expect(getInternals(widget).messages.at(-1)).toMatchObject({ status: 'error', errorType, content: text });
+    widget.destroy();
+  });
+
+  it('takes the limit messages from strings', async () => {
+    const widget = new Widget({ apiUrl: 'https://api.test/chat', strings: { errorRateLimitWait: 'Warte {seconds} Sekunden.' } });
+    widget.init();
+    getInternals(widget).client.sendMessage = vi.fn().mockImplementationOnce(async function* () {
+      yield { error: 'rate_limit', retryAfterMs: 3000 };
+    });
+    await getInternals(widget).handleSend('Hi');
+    expect(getInternals(widget).messages.at(-1)?.content).toBe('Warte 3 Sekunden.');
+    widget.destroy();
+  });
+
   it('keeps streamed text when an error arrives partway through and shows the error under it', async () => {
     const widget = new Widget({ apiUrl: 'https://api.test/chat' });
     widget.init();
@@ -373,6 +492,32 @@ describe('Widget', () => {
       content: 'Second response',
       status: 'complete',
     });
+  });
+
+  it("keeps the server's id for a v1 reply and regenerates it by that id", async () => {
+    const widget = new Widget({ apiUrl: 'https://api.test/chat' });
+    widget.init();
+    const sendMessage = vi.fn()
+      .mockImplementationOnce(async function* () {
+        yield { messageId: 'srv-1' };
+        yield { content: 'First' };
+        yield { done: true };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { messageId: 'srv-2' };
+        yield { content: 'Second' };
+        yield { done: true };
+      });
+    getInternals(widget).client.sendMessage = sendMessage;
+
+    await getInternals(widget).handleSend('Hi');
+    const reply = getInternals(widget).messages.at(-1);
+    expect(reply?.id).toBe('srv-1');
+    expect(getInternals(widget).shadow.querySelector('[data-id="srv-1"]')).toBeTruthy();
+
+    await getInternals(widget).handleRegenerate('srv-1');
+    expect(sendMessage.mock.calls[1]?.[0]).toMatchObject({ regenerate: { assistantMessageId: 'srv-1' } });
+    expect(getInternals(widget).messages.at(-1)).toMatchObject({ id: 'srv-2', content: 'Second' });
   });
 
   it('blocks retry and regenerate while streaming is active', async () => {
@@ -516,7 +661,27 @@ describe('Widget', () => {
     widget2.destroy();
   });
 
-  it('sends userData with every request, not just the first', async () => {
+  it('stops sending userData once a v1 server has answered, since it keeps the answers', async () => {
+    const widget = new Widget({
+      apiUrl: 'https://api.test/chat',
+      preChatForm: { enabled: true, fields: [{ name: 'name', label: 'Name', type: 'text' as const }] },
+    });
+    widget.init();
+    getInternals(widget).handlePreChatSubmit({ name: 'Taylor' });
+    const sendMessage = vi.fn().mockImplementation(async function* () {
+      yield { messageId: crypto.randomUUID() };
+      yield { content: 'Echo' };
+      yield { done: true };
+    });
+    getInternals(widget).client.sendMessage = sendMessage;
+
+    await getInternals(widget).handleSend('First');
+    await getInternals(widget).handleSend('Second');
+    expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({ userData: { name: 'Taylor' } });
+    expect(sendMessage.mock.calls[1]?.[0]).not.toHaveProperty('userData');
+  });
+
+  it('sends userData with every request to a 0.5 server, which needs it each time', async () => {
     const widget = new Widget({
       apiUrl: 'https://api.test/chat',
       preChatForm: {
@@ -628,6 +793,22 @@ describe('Widget', () => {
 
     widget2.destroy();
     setItemSpy.mockRestore();
+  });
+
+  it('does not throw during init when {} is stored and shows the welcome message', () => {
+    localStorage.setItem('chatcops_conversation', '{}');
+    const widget = new Widget({ apiUrl: 'https://api.test/chat' });
+
+    expect(() => widget.init()).not.toThrow();
+
+    const internals = getInternals(widget);
+    const welcome = internals.messages.find((m) => m.id === 'welcome');
+    expect(welcome).toBeDefined();
+    expect(welcome?.content).toBe('How can I help you today?');
+    expect(internals.shadow.querySelector('.cc-message-assistant')?.textContent).toContain('How can I help you today?');
+    expect(localStorage.getItem('chatcops_conversation')).toBeNull();
+
+    widget.destroy();
   });
 });
 
