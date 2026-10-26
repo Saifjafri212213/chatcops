@@ -173,6 +173,7 @@ export class Widget {
   private eventHandlers = new Map<WidgetEventType, Set<AnyHandler>>();
   private containerEl?: HTMLElement;
   private autoOpenTimer?: ReturnType<typeof setTimeout>;
+  private unreadReplies = 0;
   private savedOverflow?: { value: string; priority: string };
 
   get isInline(): boolean {
@@ -228,6 +229,7 @@ export class Widget {
         position,
         openLabel: this.locale.openChat,
         closeLabel: this.locale.closeButton,
+        unreadLabel: this.locale.unreadCount,
         onClick: () => this.toggle(),
       });
     }
@@ -315,6 +317,7 @@ export class Widget {
   }
 
   open(): void {
+    this.unreadReplies = 0;
     this.hydrate();
     this.panel.show();
     if (!this.isInline) {
@@ -654,7 +657,8 @@ export class Widget {
         this.showLatestRegenerateButton();
 
         if (!this.isInline && !this.panel.isVisible) {
-          this.fab?.showBadge();
+          this.unreadReplies++;
+          this.fab?.showBadge(this.unreadReplies);
         }
       }
     } catch (err) {

@@ -84,16 +84,24 @@
   position: absolute;
   top: -2px;
   inset-inline-end: -2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
   background: #ef4444;
   border: 2px solid var(--cc-bg);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
   display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
 .cc-fab-badge.cc-visible {
-  display: block;
+  display: flex;
 }
 
 @keyframes cc-pulse {

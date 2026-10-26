@@ -934,6 +934,58 @@ describe('Widget streaming timeout configuration', () => {
     widget.open();
 
     expect(onOpen).not.toHaveBeenCalled();
+    widget.destroy();
+  });
+
+  it('counts replies finished while closed and resets on open', async () => {
+    const reply1 = [
+      'data: {"type":"start","protocol":1,"conversationId":"c1","messageId":"m1"}',
+      'data: {"type":"text-delta","id":"t1","delta":"First reply"}',
+      'data: {"type":"finish","reason":"stop"}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    const reply2 = [
+      'data: {"type":"start","protocol":1,"conversationId":"c1","messageId":"m2"}',
+      'data: {"type":"text-delta","id":"t2","delta":"Second reply"}',
+      'data: {"type":"finish","reason":"stop"}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(reply1, { status: 200 }))
+      .mockResolvedValueOnce(new Response(reply2, { status: 200 }));
+
+    const widget = new Widget({ apiUrl: 'https://api.test/chat', persistHistory: false });
+    widget.init();
+
+    const root = getInternals(widget).shadow;
+    const fabBtn = root.querySelector('.cc-fab') as HTMLButtonElement;
+    const badge = root.querySelector('.cc-fab-badge') as HTMLElement;
+
+    expect(fabBtn.getAttribute('aria-label')).toBe('Open chat');
+    expect(badge.classList.contains('cc-visible')).toBe(false);
+
+    await getInternals(widget).handleSend('Hi 1');
+    expect(badge.classList.contains('cc-visible')).toBe(true);
+    expect(badge.textContent).toBe('1');
+    expect(fabBtn.getAttribute('aria-label')).toBe('Open chat, 1 unread');
+
+    await getInternals(widget).handleSend('Hi 2');
+    expect(badge.textContent).toBe('2');
+    expect(fabBtn.getAttribute('aria-label')).toBe('Open chat, 2 unread');
+
+    widget.open();
+    expect(badge.classList.contains('cc-visible')).toBe(false);
+    expect(badge.textContent).toBe('');
+    expect(fabBtn.getAttribute('aria-label')).toBe('Close');
+
+    widget.close();
+    expect(badge.classList.contains('cc-visible')).toBe(false);
+    expect(fabBtn.getAttribute('aria-label')).toBe('Open chat');
+
+    widget.destroy();
   });
 
   describe('scroll-lock', () => {
