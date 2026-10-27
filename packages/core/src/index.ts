@@ -94,12 +94,14 @@ export type {
   Retriever,
   Reranker,
   OpenAIEmbedderOptions,
+  VoyageEmbedderOptions,
   RetrieverKnowledgeOptions,
   VectorRetrieverOptions,
   HybridRetrieverOptions,
 } from './retrieval/index.js';
 export {
   openaiEmbedder,
+  voyageEmbedder,
   retrieverKnowledge,
   formatSources,
   uniqueChunks,
