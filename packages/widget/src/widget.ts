@@ -571,6 +571,7 @@ export class Widget {
     this.isStreaming = true;
     this.panel.input.setDisabled(true);
     this.panel.messages.clearRegenerateButtons();
+    this.panel.messages.beginReply();
     this.panel.messages.showTyping();
 
     const assistantMsg: MessageData = {
@@ -707,6 +708,7 @@ export class Widget {
       }
 
       if (!this.destroyed) {
+        this.panel.messages.finishReply(assistantMsg);
         this.isStreaming = false;
         this.panel.input.setDisabled(false);
         this.panel.input.focus();
