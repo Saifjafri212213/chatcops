@@ -469,4 +469,54 @@ describe('assertions', () => {
     const out = pretty({ fixture: 'a.yaml', test: 't', passRate: 0, pass: false, runs: [{ fixture: 'a.yaml', test: 't', run: 1, pass: false, turns: [], error: 'turn 1 failed: x' }] });
     expect(out).toBe('✗ a.yaml > t\n    turn 1 failed: x\n');
   });
+
+  it('javascript: boolean and object returns, async, relative path', async () => {
+    const fixture = join(TMP, 'js-fixture.chat.yaml');
+    const checksDir = join(TMP, 'checks');
+    mkdirSync(checksDir, { recursive: true });
+
+    writeFileSync(join(checksDir, 'true.mjs'), 'export default () => true;');
+    writeFileSync(join(checksDir, 'false.mjs'), 'export default () => false;');
+    writeFileSync(join(checksDir, 'object.mjs'), 'export default () => ({ pass: true, reason: "looks good", score: 0.9 });');
+    writeFileSync(join(checksDir, 'object-fail.mjs'), 'export default () => ({ pass: false, reason: "nope" });');
+    writeFileSync(join(checksDir, 'async.mjs'), 'export default async () => ({ pass: true, reason: "async ok" });');
+
+    const context = { fixture };
+
+    expect(await check({ javascript: './checks/true.mjs' }, turn, [turn], context)).toMatchObject({ pass: true });
+    expect(await check({ javascript: './checks/false.mjs' }, turn, [turn], context)).toMatchObject({ pass: false });
+    expect(await check({ javascript: './checks/object.mjs' }, turn, [turn], context)).toMatchObject({ pass: true, reason: 'looks good', score: 0.9 });
+    expect(await check({ javascript: './checks/object-fail.mjs' }, turn, [turn], context)).toMatchObject({ pass: false, reason: 'nope' });
+    expect(await check({ javascript: './checks/async.mjs' }, turn, [turn], context)).toMatchObject({ pass: true, reason: 'async ok' });
+  });
+
+  it('javascript: throw, missing file, no default export, not- on a setup error still fails', async () => {
+    const fixture = join(TMP, 'js-errors.chat.yaml');
+    const checksDir = join(TMP, 'checks-errors');
+    mkdirSync(checksDir, { recursive: true });
+
+    writeFileSync(join(checksDir, 'throws.mjs'), 'export default () => { throw new Error("bad input"); };');
+    writeFileSync(join(checksDir, 'no-default.mjs'), 'export const helper = () => true;');
+
+    const context = { fixture };
+
+    const thrown = await check({ javascript: './checks-errors/throws.mjs' }, turn, [turn], context);
+    expect(thrown).toMatchObject({ pass: false });
+    expect(thrown.reason).toContain('throws.mjs');
+    expect(thrown.reason).toContain('bad input');
+
+    const missing = await check({ javascript: './checks-errors/does-not-exist.mjs' }, turn, [turn], context);
+    expect(missing).toMatchObject({ pass: false });
+    expect(missing.reason).toContain('does-not-exist.mjs');
+
+    const noDefault = await check({ javascript: './checks-errors/no-default.mjs' }, turn, [turn], context);
+    expect(noDefault).toMatchObject({ pass: false, reason: expect.stringContaining('no default function') });
+
+    expect(await check({ javascript: 123 }, turn, [turn], context)).toMatchObject({ pass: false, reason: 'javascript takes a path to a module' });
+
+    // not- on a setup error must still fail, not flip to pass.
+    const notMissing = await check({ 'not-javascript': './checks-errors/does-not-exist.mjs' }, turn, [turn], context);
+    expect(notMissing).toMatchObject({ pass: false });
+    expect(notMissing.reason).toContain('does-not-exist.mjs');
+  });
 });
