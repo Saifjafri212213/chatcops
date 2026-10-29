@@ -1,5 +1,5 @@
 import type { WirePart } from './protocol.js';
-import { turnstileToken } from './turnstile.js';
+import { keyStore, type KeyStore } from '../storage.js';
 import type { WidgetChatRequest, WidgetChatChunk } from './types.js';
 
 export interface ChatClientOptions {
@@ -8,6 +8,10 @@ export interface ChatClientOptions {
   timeout?: number;
   /** Cloudflare Turnstile site key, when the server checks Turnstile before issuing a session. */
   turnstileSiteKey?: string;
+  /** The host site's signed token for a signed-in visitor, sent when asking for a session. */
+  userToken?: string;
+  /** Where the session token is kept. Defaults to localStorage; the widget passes its own store. */
+  store?: KeyStore;
 }
 
 export interface SendMessageOptions {
@@ -26,20 +30,36 @@ export class ChatClient {
   private apiUrl: string;
   private timeout: number;
   private sessionKey: string;
-  /** The last token, kept across page loads so the server can resume the conversation. */
-  private saved: Partial<Session> = {};
+  /** The last token, kept across page loads so the server can resume the conversation. Read on first use. */
+  private saved?: Partial<Session>;
+  private store: KeyStore;
   private turnstileSiteKey?: string;
+  private userToken?: string;
 
   constructor(options: ChatClientOptions) {
     this.apiUrl = options.apiUrl;
     this.turnstileSiteKey = options.turnstileSiteKey;
+    this.userToken = options.userToken;
     this.timeout = options.timeout ?? 30000;
     this.sessionKey = `chatcops-session:${options.apiUrl}`;
-    try {
-      this.saved = JSON.parse(localStorage.getItem(this.sessionKey) || '{}');
-    } catch {
-      // Storage unavailable: tokens last for this page only.
-    }
+    this.store = options.store ?? keyStore('local');
+  }
+
+  /**
+   * The signed-in visitor's identity token for the next session, or none.
+   * The session token from before is dropped, so the next message gets one
+   * for the new identity (the server starts a new conversation for a
+   * different user).
+   */
+  setUserToken(token: string | undefined): void {
+    if (token === this.userToken) return;
+    this.userToken = token;
+    this.saved = {};
+    this.store.remove(this.sessionKey);
+  }
+
+  get identity(): string | undefined {
+    return this.userToken;
   }
 
   async *sendMessage(
@@ -97,7 +117,15 @@ export class ChatClient {
           body: JSON.stringify(body),
           signal: controller.signal,
         });
-      const saved = this.saved;
+      let saved = this.saved;
+      if (!saved) {
+        try {
+          saved = (JSON.parse(this.store.get(this.sessionKey) || '{}') as Partial<Session> | null) ?? {};
+        } catch {
+          saved = {};
+        }
+        this.saved = saved;
+      }
       const resumable = saved.conversationId === request.conversationId;
       // Servers before 0.6 ignore `protocol` and answer in the old format.
       let response = await post(this.apiUrl, { protocol: 1, ...request }, resumable ? saved.token : undefined);
@@ -110,16 +138,17 @@ export class ChatClient {
         const minted = await post(this.apiUrl.replace(/\/?(\?.*)?$/, '/session$1'), {
           conversationId: request.conversationId,
           previousToken: saved.token,
-          turnstileToken: this.turnstileSiteKey && !resumable ? await turnstileToken(this.turnstileSiteKey) : undefined,
+          userToken: this.userToken,
+          // Its own chunk: only sites with a Turnstile key download it.
+          turnstileToken:
+            this.turnstileSiteKey && !resumable
+              ? await (await import('./turnstile.js')).turnstileToken(this.turnstileSiteKey)
+              : undefined,
         });
         if (minted.ok) {
           const session = (await minted.json()) as Session;
           this.saved = session;
-          try {
-            localStorage.setItem(this.sessionKey, JSON.stringify(session));
-          } catch {
-            // Storage full or unavailable: the token still works on this page.
-          }
+          this.store.set(this.sessionKey, JSON.stringify(session));
           if (session.conversationId !== request.conversationId) {
             request = { ...request, conversationId: session.conversationId };
             yield { conversationId: session.conversationId };
@@ -237,6 +266,11 @@ function fromPart(part: WirePart): WidgetChatChunk | null {
       return { content: part.delta };
     case 'lead-captured':
       return { leadCaptured: true, leadData: part.lead };
+    case 'source': {
+      const { url, title } = part;
+      if (!url.startsWith('http://') && !url.startsWith('https://')) return null;
+      return { source: { url, title } };
+    }
     case 'error':
       return errorChunk(part.code === 'budget_exceeded' && part.scope !== 'conversation' ? 'budget_daily' : part.code, part.retryAfterMs);
     case 'finish':

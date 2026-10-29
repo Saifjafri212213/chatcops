@@ -9,6 +9,7 @@ import type {
   ConversationStore,
   KnowledgeSource,
   LocaleStrings,
+  Logger,
   ProviderConfig,
   WebhookConfig,
 } from '@chatcops/core';
@@ -20,6 +21,12 @@ export interface ChatCopsServerConfig {
    */
   provider: ProviderConfig | AIProvider;
   systemPrompt: string;
+  /**
+   * Where the server writes startup notes, refused requests and every error
+   * it handles instead of throwing, each with a stable `event` name. Default
+   * `consoleLogger()`; `jsonLogger()` writes one JSON object per line.
+   */
+  logger?: Logger;
   tools?: ChatTool[];
   toolTimeoutMs?: number;
   /** Most tokens in one reply. Defaults to 4096 (`DEFAULT_MAX_TOKENS` in @chatcops/core). */
@@ -110,6 +117,14 @@ export interface ChatCopsServerConfig {
    */
   turnstile?: TurnstileConfig;
   /**
+   * Signed-in visitors. Your site signs a \`userToken\` (an HS256 JWT with
+   * \`sub\`, \`exp\` and an optional \`tier\`) with \`secret\`, and the widget
+   * sends it with \`/session\`. The user id is stored on the conversation, so
+   * the same user can resume it with a fresh token, and \`tiers\` gives a
+   * tier its own budgets (merged over \`budgets\`). Needs \`sessionSecrets\`.
+   */
+  identity?: { secret: string; tiers?: Record<string, Budgets> };
+  /**
    * Adds the reply's token usage to the `finish` part of protocol v1
    * streams. Off by default, since visitors can read the stream.
    */
@@ -120,6 +135,10 @@ export interface ChatCopsServerConfig {
 
 // Everything in a request can end up in the system prompt, so every field has a ceiling.
 export const MAX_USER_DATA_FIELDS = 50;
+/** `pageContext.data`, what a site adds with the widget's setContext(). */
+export const MAX_PAGE_DATA_FIELDS = 20;
+export const MAX_PAGE_DATA_KEY_LENGTH = 40;
+export const MAX_PAGE_DATA_VALUE_LENGTH = 500;
 export const MAX_USER_DATA_KEY_LENGTH = 100;
 /** Longer page URLs are still accepted, but only this much reaches the prompt. */
 export const MAX_PAGE_URL_LENGTH = 2000;
@@ -138,6 +157,12 @@ export const chatRequestSchema = z.object({
     title: z.string().max(500),
     description: z.string().max(1000).optional(),
     contentSnippet: z.string().max(2000).optional(),
+    data: z
+      .record(z.string().max(MAX_PAGE_DATA_KEY_LENGTH), z.string().max(MAX_PAGE_DATA_VALUE_LENGTH))
+      .refine((data) => Object.keys(data).length <= MAX_PAGE_DATA_FIELDS, {
+        message: `pageContext.data can have at most ${MAX_PAGE_DATA_FIELDS} fields`,
+      })
+      .optional(),
   }).optional(),
   locale: z.string().max(10).optional(),
   userData: z

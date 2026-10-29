@@ -9,6 +9,8 @@ export interface WidgetChatRequest {
     title: string;
     description?: string;
     contentSnippet?: string;
+    /** What the site added with setContext(). */
+    data?: Record<string, string>;
   };
   locale?: string;
   userData?: Record<string, string>;
@@ -27,4 +29,6 @@ export interface WidgetChatChunk {
   leadCaptured?: boolean;
   leadData?: Record<string, unknown>;
   suggestedActions?: string[];
+  /** A page the reply cited (protocol v1 `source` part). */
+  source?: { url: string; title?: string };
 }

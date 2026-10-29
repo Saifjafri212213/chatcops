@@ -23,6 +23,7 @@ export default defineConfig({
     // `undefined`.
     schema: {
       OPENAI_API_KEY: envField.string({ context: 'server', access: 'secret', optional: true }),
+      CHATCOPS_SESSION_SECRET: envField.string({ context: 'server', access: 'secret', optional: true }),
       UPSTASH_REDIS_REST_URL: envField.string({ context: 'server', access: 'secret', optional: true }),
       UPSTASH_REDIS_REST_TOKEN: envField.string({ context: 'server', access: 'secret', optional: true }),
       VISITOR_HASH_SALT: envField.string({ context: 'server', access: 'secret', optional: true }),
@@ -139,6 +140,7 @@ export default defineConfig({
             { label: 'AI Providers', slug: 'core/providers' },
             { label: 'Tools', slug: 'core/tools' },
             { label: 'Knowledge Base', slug: 'core/knowledge-base' },
+            { label: 'Testing Your Bot', slug: 'core/testing' },
             { label: 'Analytics', slug: 'core/analytics' },
           ],
         },

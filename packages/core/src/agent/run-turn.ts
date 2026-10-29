@@ -1,3 +1,4 @@
+import { consoleLogger, type Logger } from '../logger.js';
 import { messageText } from '../parts.js';
 import { PROTOCOL_VERSION, type WireErrorCode, type WireFinishReason, type WirePart } from '../protocol/v1.js';
 import type { AIProvider, ProviderEvent } from '../providers/types.js';
@@ -15,6 +16,14 @@ import { BudgetExceededError, type BudgetContext, type BudgetGuard } from '../li
 import { DEFAULT_MAX_TOKENS } from '../providers/base.js';
 import { ContentFilterError, MaxStepsError, RefusalError } from './errors.js';
 import { executorRegistry, type ToolRegistry, toolOutput } from './tool-registry.js';
+import {
+  CitationParser,
+  NATIVE_SOURCES_INSTRUCTION,
+  parseCitations,
+  sourcesContext,
+  sourcePart,
+} from '../retrieval/citations.js';
+import type { RetrievedChunk } from '../retrieval/types.js';
 
 /** Model requests per turn: five tool rounds and the answer after them, as in 0.5. */
 export const DEFAULT_MAX_STEPS = 6;
@@ -26,6 +35,13 @@ export interface RunTurnOptions {
   systemPrompt: string;
   /** Per-request instructions, sent after the system prompt and outside the cached prefix. */
   systemContext?: string;
+  /**
+   * Retrieved chunks the reply can cite. Each one the model cites becomes a
+   * `source` part, once per page. Providers with native citations get them
+   * as content; others get a numbered block in the system context and cite
+   * with `[n]`, and numbers that match no source are removed from the text.
+   */
+  sources?: RetrievedChunk[];
   tools?: ToolRegistry;
   conversationId: string;
   /** The id to save the reply under. A new one by default. */
@@ -39,6 +55,8 @@ export interface RunTurnOptions {
   signal?: AbortSignal;
   /** Adds token usage to the `finish` part. */
   exposeUsage?: boolean;
+  /** Where warnings and tool errors go. Default `consoleLogger()`. */
+  logger?: Logger;
   /**
    * Checked before each model request and charged after it. A used-up
    * budget ends the reply with `budget_exceeded`, and the reply length is
@@ -141,6 +159,7 @@ function toWire(part: MessagePart): WirePart | null {
  * Only a failing `onPersist` throws.
  */
 export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart, TurnResult> {
+  const logger = options.logger ?? consoleLogger();
   const { provider, signal } = options;
   const tools = options.tools ?? NO_TOOLS;
   const maxSteps = Math.max(1, options.maxSteps ?? DEFAULT_MAX_STEPS);
@@ -156,6 +175,26 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
   };
   const parts = message.parts as MessagePart[];
   let textCount = 0;
+  const sources = options.sources ?? [];
+  const nativeCitations = sources.length > 0 && provider.citations === 'native' && !!provider.step;
+  const systemContext = [
+    options.systemContext,
+    sources.length ? (nativeCitations ? NATIVE_SOURCES_INSTRUCTION : sourcesContext(sources)) : undefined,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  const citedPages = new Set<string>();
+
+  /** `source` parts for newly cited chunks, at most one per page. */
+  function* cite(indexes: number[]): Generator<WirePart> {
+    for (const index of indexes) {
+      const chunk = sources[index];
+      if (!chunk || citedPages.has(chunk.source.id)) continue;
+      citedPages.add(chunk.source.id);
+      const wire = add(sourcePart(chunk));
+      if (wire) yield wire;
+    }
+  }
 
   const add = (part: MessagePart): WirePart | null => {
     parts.push(part);
@@ -233,6 +272,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
     let textId: string | null = null;
     let finish: Extract<ProviderEvent, { type: 'finish' }> | undefined;
     const calls: Extract<ProviderEvent, { type: 'tool-call' }>[] = [];
+    const parser = sources.length && !nativeCitations ? new CitationParser(sources.length) : null;
+    const cited: number[] = [];
 
     const budget = yield* checkBudget(stepNumber);
     if (budget.ended) return budget.ended;
@@ -242,8 +283,9 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
       for await (const event of step({
         messages: [...options.messages, message],
         systemPrompt: options.systemPrompt,
-        ...(options.systemContext ? { systemContext: options.systemContext } : {}),
+        ...(systemContext ? { systemContext } : {}),
         ...(tools.definitions.length ? { tools: tools.definitions } : {}),
+        ...(nativeCitations ? { sources } : {}),
         maxTokens: budget.maxTokens,
         temperature: options.temperature,
         signal,
@@ -254,7 +296,11 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
             textId = `${message.id}-${++textCount}`;
             yield { type: 'text-start', id: textId };
           }
-          yield { type: 'text-delta', id: textId, delta: event.delta };
+          const read = parser ? parser.push(event.delta) : { text: event.delta, cited: [] };
+          cited.push(...read.cited);
+          if (read.text) yield { type: 'text-delta', id: textId, delta: read.text };
+        } else if (event.type === 'source') {
+          cited.push(event.index);
         } else if (event.type === 'tool-call') {
           calls.push(event);
         } else if (event.type === 'finish') {
@@ -266,6 +312,11 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
     } catch (error) {
       if (textId) yield { type: 'text-end', id: textId };
       return yield* failed(error);
+    }
+    if (parser && textId) {
+      const rest = parser.flush();
+      cited.push(...rest.cited);
+      if (rest.text) yield { type: 'text-delta', id: textId, delta: rest.text };
     }
     if (textId) yield { type: 'text-end', id: textId };
     addUsage(usage, finish.usage);
@@ -280,9 +331,12 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
     }
 
     for (const part of finish.parts) {
-      const wire = add(part);
+      // Stored text gets the same cleanup as the streamed text.
+      const stored = parser && part.type === 'text' ? { ...part, text: parseCitations(part.text, sources.length).text } : part;
+      const wire = add(stored);
       if (wire) yield wire;
     }
+    yield* cite(cited);
 
     if (finish.reason === 'error') {
       return yield* end('incomplete', {
@@ -291,7 +345,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
       });
     }
     if (finish.reason === 'length') {
-      console.warn('[chatcops] The reply was cut off at the token limit. Raise `maxTokens` if this keeps happening.');
+      logger.warn('reply_truncated', 'The reply was cut off at the token limit. Raise `maxTokens` if this keeps happening.');
       return yield* end('incomplete', { reason: 'length' });
     }
     if (finish.reason !== 'tool-calls' || calls.length === 0) {
@@ -318,7 +372,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
       calls.map(({ call, inputError }) =>
         inputError
           ? Promise.resolve<ToolResult>({ success: false, message: inputError })
-          : tools.run(call, { conversationId: options.conversationId, signal: toolSignal, timeoutMs: options.toolTimeoutMs })
+          : tools.run(call, { conversationId: options.conversationId, signal: toolSignal, timeoutMs: options.toolTimeoutMs, logger })
       )
     );
 
@@ -348,6 +402,8 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
     const queued: WirePart[] = [];
     let textId: string | null = null;
     let text: { type: 'text'; text: string } | null = null;
+    const parser = sources.length ? new CitationParser(sources.length) : null;
+    const cited: number[] = [];
 
     const toolExecutor: ProviderToolExecutor = async (call) => {
       text = null;
@@ -356,7 +412,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
       };
       const callWire = add(callPart);
       if (callWire) queued.push(callWire);
-      const result = await tools.run(call, { conversationId: options.conversationId, signal: toolSignal, timeoutMs: options.toolTimeoutMs });
+      const result = await tools.run(call, { conversationId: options.conversationId, signal: toolSignal, timeoutMs: options.toolTimeoutMs, logger });
       callPart.state = result.success ? 'done' : 'error';
       for (const part of [resultPart(call, result), ...(result.success ? tools.emits(call, result) : [])]) {
         const wire = add(part);
@@ -370,7 +426,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
         // Providers written for 0.4 read `content` only, so a reply the
         // visitor walked away from would look finished. Leave it out.
         messages: options.messages.filter((m) => m.status !== 'aborted'),
-        systemPrompt: joinSystem(options.systemPrompt, options.systemContext),
+        systemPrompt: joinSystem(options.systemPrompt, systemContext || undefined),
         ...(tools.definitions.length ? { tools: tools.definitions } : {}),
         toolExecutor,
         toolTimeoutMs: options.toolTimeoutMs,
@@ -395,8 +451,16 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
           text = { type: 'text', text: '' };
           parts.push(text);
         }
-        text.text += chunk;
-        yield { type: 'text-delta', id: textId, delta: chunk };
+        const read = parser ? parser.push(chunk) : { text: chunk, cited: [] };
+        cited.push(...read.cited);
+        text.text += read.text;
+        if (read.text) yield { type: 'text-delta', id: textId, delta: read.text };
+      }
+      if (parser && textId) {
+        const rest = parser.flush();
+        cited.push(...rest.cited);
+        if (text) text.text += rest.text;
+        if (rest.text) yield { type: 'text-delta', id: textId, delta: rest.text };
       }
     } catch (error) {
       if (textId) yield { type: 'text-end', id: textId };
@@ -407,6 +471,7 @@ export async function* runTurn(options: RunTurnOptions): AsyncGenerator<WirePart
     if (textId) yield { type: 'text-end', id: textId };
     if (signal?.aborted) return yield* end('aborted');
     yield* queued.splice(0);
+    yield* cite(cited);
     return yield* end('complete');
   }
 }

@@ -1,55 +1,19 @@
 import type { APIRoute } from 'astro';
 import { getSecret } from 'astro:env/server';
+import { env } from 'cloudflare:workers';
 import { chatcopsCloudflareHandler } from '@chatcops/server/cloudflare';
-import { FAQKnowledgeSource } from '@chatcops/core';
+import { cloudflareStorage, type D1Database } from '@chatcops/store-cloudflare';
+import { docsBotFaq, docsBotSystemPrompt } from '../../lib/docs-bot';
+import { docsKnowledge } from '../../lib/docs-index';
 
 export const prerender = false;
 
-const faq = new FAQKnowledgeSource([
-  {
-    question: 'What is ChatCops?',
-    answer:
-      'ChatCops is an open-source, universal AI chatbot widget you can embed on any website with a single script tag. It supports Claude, OpenAI, and Gemini as AI providers.',
-  },
-  {
-    question: 'How do I install ChatCops?',
-    answer:
-      'The easiest way is via CDN: add a <script> tag with src="https://cdn.jsdelivr.net/npm/@chatcops/widget/dist/chatcops.min.js" and set data-api-url to your server endpoint. For npm: install @chatcops/widget, @chatcops/server, and optionally @chatcops/core.',
-  },
-  {
-    question: 'What AI providers are supported?',
-    answer:
-      'ChatCops supports Claude (Anthropic), OpenAI, and Google Gemini. You configure the provider and model on the server side — the widget is provider-agnostic.',
-  },
-  {
-    question: 'Is ChatCops free?',
-    answer:
-      'Yes! ChatCops is fully open-source under the MIT license. You only pay for your AI provider API usage (e.g., Anthropic, OpenAI, or Google).',
-  },
-  {
-    question: 'What server platforms are supported?',
-    answer:
-      'ChatCops has adapters for Express.js, Vercel Serverless/Edge Functions, and Cloudflare Workers. You can also build custom integrations using the core package.',
-  },
-  {
-    question: 'Can I customize the widget appearance?',
-    answer:
-      'The widget uses a dark theme by default. You can customize the accent color, text and background colors, font, border radius, and position through the theme configuration.',
-  },
-  {
-    question: 'Does ChatCops support multiple languages?',
-    answer:
-      'The widget text is in English by default. To show it in another language, pass your translations in the widget\'s `strings` option. When the widget sends a `locale`, the server also asks the model to reply in that language.',
-  },
-  {
-    question: 'How does the lead capture tool work?',
-    answer:
-      'The LeadCaptureTool lets the AI collect contact information (name, email, company, project details) during conversation. You provide a callback to handle the captured lead data.',
-  },
-]);
-
 // Built on the first request rather than at import: the API key is a Worker
 // secret that only exists inside a request.
+//
+// With the CHATCOPS_DB binding (wrangler.jsonc), conversations, limits and
+// turn locks live in D1 and hold across every isolate; without it, in memory.
+// With the CHATCOPS_SESSION_SECRET secret, the chat needs session tokens.
 let chat: ReturnType<typeof chatcopsCloudflareHandler> | undefined;
 function getChat() {
   chat ??= chatcopsCloudflareHandler({
@@ -57,18 +21,9 @@ function getChat() {
       type: 'openai',
       apiKey: getSecret('OPENAI_API_KEY') ?? '',
     },
-    systemPrompt: `You are the ChatCops documentation assistant on the official ChatCops website.
-Your job is to help developers understand and use ChatCops — an open-source AI chatbot widget.
-
-Key facts:
-- ChatCops has 3 packages: @chatcops/widget (client), @chatcops/server (backend), @chatcops/core (providers/tools)
-- Widget is zero-dependency, Shadow DOM isolated, and works with a single script tag
-- Server supports Express, Vercel, and Cloudflare Workers
-- AI providers: Claude, OpenAI, Gemini
-- MIT licensed, fully open-source at github.com/codercops/chatcops
-
-Be concise, helpful, and friendly. Use markdown formatting. If you don't know something specific, direct users to the docs.`,
-    knowledge: [faq],
+    systemPrompt: docsBotSystemPrompt,
+    // The docs pages, so answers cite the page they come from, then the FAQ.
+    knowledge: [docsKnowledge(readAsset, getSecret('OPENAI_API_KEY') ?? ''), docsBotFaq],
     allowedOrigins: [
       'https://chat.codercops.com',
       ...(import.meta.env.DEV ? ['http://localhost:4321'] : []),
@@ -78,8 +33,27 @@ Be concise, helpful, and friendly. Use markdown formatting. If you don't know so
       request.headers.get('cf-connecting-ip') ??
       (import.meta.env.DEV ? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() : undefined),
     rateLimit: { maxRequests: 10, windowMs: 60_000 },
+    ...storageOptions(),
   });
   return chat;
+}
+
+/** A file of the docs index (public/docs-index/), from the Worker's static assets. */
+async function readAsset(name: string): Promise<ArrayBuffer> {
+  const assets = (env as { ASSETS: { fetch(request: Request): Promise<Response> } }).ASSETS;
+  const response = await assets.fetch(new Request(`https://assets.local/docs-index/${name}`));
+  if (!response.ok) throw new Error(`The docs index file ${name} is missing (HTTP ${response.status}).`);
+  return response.arrayBuffer();
+}
+
+function storageOptions() {
+  const db = (env as { CHATCOPS_DB?: D1Database }).CHATCOPS_DB;
+  const sessionSecret = getSecret('CHATCOPS_SESSION_SECRET');
+  return {
+    ...(db ? { storage: cloudflareStorage({ d1: db }), retention: { conversationsDays: 30 } } : {}),
+    // Widgets cached from before 0.6 don't send tokens yet.
+    ...(sessionSecret ? { sessionSecrets: [sessionSecret], requireSession: false } : {}),
+  };
 }
 
 export const POST: APIRoute = ({ request, locals }) => getChat()(request, undefined, locals.cfContext);

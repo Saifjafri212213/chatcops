@@ -6,7 +6,8 @@ export default defineConfig({
     projects: ['packages/*'],
     coverage: {
       provider: 'v8',
-      include: ['packages/*/src/**'],
+      // Source files only, so a README or stylesheet in src isn't parsed as code.
+      include: ['packages/*/src/**/*.ts'],
       // Sample apps, and the two-line command entry points (their logic is in cli.ts).
       exclude: ['packages/server/src/examples/**', 'packages/store-*/src/bin.ts'],
       reporter: ['text', 'lcov'],
@@ -16,6 +17,8 @@ export default defineConfig({
         'packages/core/src/**': { lines: 80, branches: 80 },
         'packages/server/src/**': { lines: 90, branches: 85 },
         'packages/widget/src/**': { lines: 90, branches: 80 },
+        'packages/ingest/src/**': { lines: 85, branches: 80 },
+        'packages/cli/src/**': { lines: 85, branches: 80 },
         // Store packages start strict: the conformance suite covers most paths.
         // It needs the databases CI runs, so locally (where those tests skip
         // without CHATCOPS_TEST_* set) the store floor only applies in CI.

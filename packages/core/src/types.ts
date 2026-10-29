@@ -1,3 +1,4 @@
+import type { Logger } from './logger.js';
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -144,6 +145,8 @@ export interface PageContext {
   title: string;
   description?: string;
   contentSnippet?: string;
+  /** Details the site adds for the next turns (the widget's `setContext()`), such as the visitor's plan. */
+  data?: Record<string, string>;
 }
 
 export interface LeadData {
@@ -191,6 +194,8 @@ export interface ToolContext {
   conversationId: string;
   /** Aborts when the visitor leaves or the tool times out. */
   signal: AbortSignal;
+  /** The server's logger, for problems the tool handles itself. */
+  logger?: Logger;
 }
 
 export interface ToolResult {
@@ -224,6 +229,8 @@ export type ProviderEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ProviderConfig {
   type: 'claude' | 'openai' | 'gemini' | 'openai-compatible' | (string & {});
+  /** Where the provider's warnings go. The server passes its own `logger`. */
+  logger?: Logger;
   /** Required for the hosted providers; optional for openai-compatible and custom providers. */
   apiKey?: string;
   model?: string;

@@ -3,6 +3,7 @@ import {
   isAIProvider,
   ConversationManager,
   AnalyticsCollector,
+  ANALYTICS_EVENTS,
   BufferedEventSink,
   statsFromSink,
   type AnalyticsStats,
@@ -20,9 +21,11 @@ import {
   toolRegistry,
   toolToDefinition,
   validateTools,
+  consoleLogger,
   type BudgetScope,
   type Budgets,
   type ChatMessage,
+  type RetrievedChunk,
   type CounterStore,
   type LegacyChunk,
   type WireErrorBody,
@@ -36,33 +39,36 @@ import { DEFAULT_SESSION_TTL_SEC, createSessions } from './security/sessions.js'
 import { logSecurityAtStartup } from './security/startup-checks.js';
 import { VISITOR_CONTEXT_INSTRUCTION, buildVisitorContext, isLocaleTag, withVisitorContext } from './visitor-context.js';
 import { WebhookDispatcher } from './webhook.js';
+import { historyBefore, knowledgeContext } from './knowledge.js';
 
 export function createChatHandler(config: ChatCopsServerConfig) {
+  const log = config.logger ?? consoleLogger();
   if (config.i18n) {
-    console.warn('[chatcops] The `i18n` option is deprecated and ignored. Set the widget text with its `strings` option.');
+    log.warn('deprecated_option', 'The `i18n` option is deprecated and ignored. Set the widget text with its `strings` option.');
   }
 
   const providerPromise = isAIProvider(config.provider)
     ? Promise.resolve(config.provider)
-    : createProvider(config.provider);
+    : createProvider({ logger: log, ...config.provider });
   // A failed setup (unknown provider type, SDK that throws on a missing key)
   // is logged once here and reported to visitors per request below. Without
   // this handler it would be an unhandled rejection and stop the process.
   // Only the message is logged: SDK errors can carry the config or headers.
   providerPromise.catch((err) => {
-    console.error('[chatcops] Provider setup failed:', err instanceof Error ? err.message : String(err));
+    log.error('provider_setup_failed', `Provider setup failed: ${err instanceof Error ? err.message : String(err)}`);
   });
   if (config.storage && config.conversationStore) {
     throw new Error('Set `storage` or `conversationStore`, not both. `storage.conversations` replaces `conversationStore`.');
   }
   if (!config.storage && !config.conversationStore && onServerless() && !warnedMemoryStorage) {
     warnedMemoryStorage = true;
-    console.warn(
-      '[chatcops] No `storage` is set, so conversations are kept in memory. On serverless each instance has its own memory, so a conversation can lose its history between messages. Use a store package such as @chatcops/store-postgres or @chatcops/store-redis.'
+    log.warn(
+      'memory_storage',
+      'No `storage` is set, so conversations are kept in memory. On serverless each instance has its own memory, so a conversation can lose its history between messages. Use a store package such as @chatcops/store-postgres or @chatcops/store-redis.'
     );
   }
   const storage = config.storage ?? (config.conversationStore ? { conversations: config.conversationStore } : undefined);
-  const conversations = new ConversationManager(storage ? { storage } : {});
+  const conversations = new ConversationManager({ ...(storage ? { storage } : {}), logger: log });
   // Counted in the storage's counters when it has them, so limits and
   // budgets hold across every server instance; otherwise in this process.
   // Nothing runs on a timer, which Workers don't allow at global scope.
@@ -71,7 +77,7 @@ export function createChatHandler(config: ChatCopsServerConfig) {
   const budgetGuard = budgets ? createBudgetGuard(counters, budgets.budgets) : undefined;
   if (budgets && !loggedBudgets) {
     loggedBudgets = true;
-    console.info(describeBudgets(budgets.budgets, budgets.defaulted));
+    log.info('budgets', describeBudgets(budgets.budgets, budgets.defaulted));
   }
   const rateLimit = { maxRequests: 30, windowMs: 60_000, ...config.rateLimit };
   if (rateLimit.maxRequests <= 0) throw new Error('maxRequests must be greater than 0');
@@ -83,7 +89,7 @@ export function createChatHandler(config: ChatCopsServerConfig) {
   // too when it has one, so stats can cover every instance.
   const collector = config.analytics ? new AnalyticsCollector() : null;
   const eventSink = config.analytics ? storage?.events : undefined;
-  const bufferedEvents = eventSink ? new BufferedEventSink(eventSink) : undefined;
+  const bufferedEvents = eventSink ? new BufferedEventSink(eventSink, { logger: log }) : undefined;
   const analytics = collector
     ? {
         track(type: string, data?: Record<string, unknown>) {
@@ -92,13 +98,28 @@ export function createChatHandler(config: ChatCopsServerConfig) {
         },
       }
     : null;
-  const webhooks = config.webhooks?.length ? new WebhookDispatcher(config.webhooks) : null;
+  const webhooks = config.webhooks?.length ? new WebhookDispatcher(config.webhooks, undefined, log) : null;
   const toolDefs = config.tools?.map(toolToDefinition) ?? [];
   // A broken tool definition is a code mistake, so fail here, at startup,
   // rather than as a provider error on the first message.
   validateTools(toolDefs);
   const tools = toolRegistry(config.tools);
-  const sessions = createSessions(config, async (id) => (await conversations.getMessages(id)).length === 0);
+  const sessions = createSessions(config, async (id) => {
+    const conversation = await conversations.getOrCreate(id);
+    const uid = conversation.metadata?.uid;
+    return { unused: conversation.messages.length === 0, ...(typeof uid === 'string' ? { uid } : {}) };
+  });
+  // A tier's budgets replace those scopes of the base ones; counts are shared.
+  // Built here so a mistake in one fails at startup.
+  const tierGuards = new Map(
+    budgets
+      ? Object.entries(config.identity?.tiers ?? {}).map(([tier, tierBudgets]) => [
+          tier,
+          createBudgetGuard(counters, { ...budgets.budgets, ...tierBudgets }),
+        ])
+      : []
+  );
+  const guardFor = (tier: string | undefined) => (tier && tierGuards.get(tier)) || budgetGuard;
   if (!loggedSecurity) {
     loggedSecurity = true;
     logSecurityAtStartup({
@@ -107,7 +128,7 @@ export function createChatHandler(config: ChatCopsServerConfig) {
       sessionTtlSec: sessions ? (config.sessionTtlSec ?? DEFAULT_SESSION_TTL_SEC) : undefined,
       requireSession: sessions?.required,
       turnstile: Boolean(config.turnstile),
-    });
+    }, log);
   }
 
   const requests: Record<ChatFormat, number> = { v1: 0, legacy: 0, 'ai-sdk': 0 };
@@ -123,8 +144,9 @@ export function createChatHandler(config: ChatCopsServerConfig) {
     requests[format] += 1;
     if (format === 'legacy' && !loggedLegacyFormat) {
       loggedLegacyFormat = true;
-      console.info(
-        '[chatcops] Answered a request in the 0.5 stream format, from a widget older than 0.6 or a client that doesn\'t send `protocol: 1`. That format keeps working until 1.0.'
+      log.info(
+        'legacy_stream_format',
+        'Answered a request in the 0.5 stream format, from a widget older than 0.6 or a client that doesn\'t send `protocol: 1`. That format keeps working until 1.0.'
       );
     }
 
@@ -137,10 +159,12 @@ export function createChatHandler(config: ChatCopsServerConfig) {
       );
     }
     const req: ValidatedChatRequest = parsed.data;
+    let user: SignedInUser | undefined;
 
     if (sessions) {
       const session = await sessions.check(options.authorization, options.origin ?? null, req.conversationId);
       if (!session.ok) return refuse(session.code, { message: session.message }, { error: 'provider_error' });
+      user = session.claims?.uid ? { uid: session.claims.uid, tier: session.claims.tier } : undefined;
     }
 
     if (clientIp) {
@@ -167,7 +191,7 @@ export function createChatHandler(config: ChatCopsServerConfig) {
       return refuse('conversation_busy', {}, { error: 'provider_error' });
     }
 
-    return { ok: true, parts: replyParts(provider, req, options.signal, clientIp, release) };
+    return { ok: true, parts: replyParts(provider, req, options.signal, clientIp, release, user) };
   }
 
   async function* replyParts(
@@ -175,11 +199,12 @@ export function createChatHandler(config: ChatCopsServerConfig) {
     req: ValidatedChatRequest,
     signal: AbortSignal | undefined,
     clientIp: string | undefined,
-    release: () => Promise<void>
+    release: () => Promise<void>,
+    user?: SignedInUser
   ): AsyncGenerator<WirePart, void> {
     const pendingWebhooks = new Set<Promise<void>>();
     try {
-      for await (const part of reply(provider, req, signal, pendingWebhooks, clientIp)) {
+      for await (const part of reply(provider, req, signal, pendingWebhooks, clientIp, user)) {
         // Tells the widget to get a session before its next request.
         yield part.type === 'start' && sessions ? { ...part, capabilities: { ...part.capabilities, session: true } } : part;
       }
@@ -230,7 +255,8 @@ export function createChatHandler(config: ChatCopsServerConfig) {
     req: ValidatedChatRequest,
     signal: AbortSignal | undefined,
     pendingWebhooks: Set<Promise<void>>,
-    clientIp: string | undefined
+    clientIp: string | undefined,
+    user?: SignedInUser
   ): AsyncGenerator<WirePart, void> {
     const conversation = await conversations.getOrCreate(req.conversationId);
     const conversationMessages = conversation.messages;
@@ -275,9 +301,9 @@ export function createChatHandler(config: ChatCopsServerConfig) {
 
     // Track analytics
     if (analytics && conversationMessages.length === 0) {
-      analytics.track('conversation:started', { conversationId: req.conversationId });
+      analytics.track(ANALYTICS_EVENTS.conversationStarted, { conversationId: req.conversationId });
     }
-    analytics?.track('message:sent', { conversationId: req.conversationId });
+    analytics?.track(ANALYTICS_EVENTS.messageSent, { conversationId: req.conversationId });
 
     // Add user message unless this is a retry of the same message or a regenerate request that already has a user message
     const hasExistingUserMessage = req.messageId
@@ -298,21 +324,23 @@ export function createChatHandler(config: ChatCopsServerConfig) {
         content: req.message,
         timestamp: Date.now(),
       };
-      await conversations.appendMessages(
-        req.conversationId,
-        [userMessage],
-        newVisitor ? { metadata: { visitor: newVisitor } } : undefined
-      );
+      // The signed-in user it belongs to, set once with the first message.
+      const metadata: Record<string, unknown> = {
+        ...(newVisitor ? { visitor: newVisitor } : {}),
+        ...(user && conversation.metadata?.uid === undefined ? { uid: user.uid } : {}),
+      };
+      await conversations.appendMessages(req.conversationId, [userMessage], Object.keys(metadata).length ? { metadata } : undefined);
     }
 
     // The system prompt is the operator's text and nothing else, so it's the
     // same on every request and providers can cache it. Everything that
     // changes per request goes in the context after it.
     const context: string[] = [];
+    let sources: RetrievedChunk[] = [];
     if (config.knowledge?.length) {
-      const contexts = await Promise.all(config.knowledge.map((k) => k.getContext(req.message)));
-      const combined = contexts.filter(Boolean).join('\n\n');
-      if (combined) context.push(combined);
+      const found = await knowledgeContext(config.knowledge, req.message, historyBefore(conversationMessages, req), signal);
+      if (found.context) context.push(found.context);
+      sources = found.sources;
     }
 
     // Visitor-supplied page context and pre-chat answers never go into the
@@ -342,24 +370,26 @@ export function createChatHandler(config: ChatCopsServerConfig) {
       messages,
       systemPrompt: config.systemPrompt,
       ...(context.length ? { systemContext: context.join('\n\n') } : {}),
+      ...(sources.length ? { sources } : {}),
       tools,
       conversationId: req.conversationId,
       toolTimeoutMs: config.toolTimeoutMs,
       maxTokens: config.maxTokens,
       temperature: config.temperature,
       exposeUsage: config.exposeUsage,
+      logger: log,
       signal,
       ...(budgetGuard
-        ? { budget: { guard: budgetGuard, context: { conversationId: req.conversationId, ...(clientIp ? { ip: clientIp } : {}) } } }
+        ? { budget: { guard: guardFor(user?.tier) ?? budgetGuard, context: { conversationId: req.conversationId, ...(clientIp ? { ip: clientIp } : {}) } } }
         : {}),
       onPart: (part) => {
         if (part.type !== 'lead-captured') return;
-        analytics?.track('lead:captured', { conversationId: req.conversationId });
+        analytics?.track(ANALYTICS_EVENTS.leadCaptured, { conversationId: req.conversationId });
         if (!webhooks) return;
         const delivery = webhooks
           .dispatch('lead:captured', { lead: part.lead, conversationId: req.conversationId })
           .catch((err) => {
-            console.error('[chatcops] Webhook delivery failed:', err);
+            log.error('webhook_failed', 'Webhook delivery failed', { error: err });
           })
           .finally(() => {
             pendingWebhooks.delete(delivery);
@@ -382,7 +412,7 @@ export function createChatHandler(config: ChatCopsServerConfig) {
         }
         if (final && complete) {
           if (assistantToReplace) await conversations.removeMessage(req.conversationId, assistantToReplace.id);
-          if (message.content) analytics?.track('message:received', { conversationId: req.conversationId });
+          if (message.content) analytics?.track(ANALYTICS_EVENTS.messageReceived, { conversationId: req.conversationId });
         }
       },
     });
@@ -399,9 +429,9 @@ export function createChatHandler(config: ChatCopsServerConfig) {
     const result = next.value;
     if (failure && result.status !== 'aborted') {
       if (failure.code === 'budget_exceeded') {
-        console.warn(`[chatcops] The ${failure.scope ?? ''} budget is used up, so a reply was refused.`);
+        log.warn('budget_exceeded', `The ${failure.scope ?? ''} budget is used up, so a reply was refused.`, { scope: failure.scope });
       } else {
-        console.error('[chatcops] Provider error:', result.error);
+        log.error('provider_error', 'Provider error', { error: result.error });
       }
     }
     // The visitor left, or the reply failed: let lead webhooks finish before
@@ -438,11 +468,19 @@ export function createChatHandler(config: ChatCopsServerConfig) {
     getAnalytics: () => collector?.getStats() ?? null,
     analyticsStats,
     cleanup,
+    /** The logger the handler writes to, for adapters to use as well. */
+    logger: log,
   };
 }
 
 /** The stream a caller writes: protocol v1, the 0.5 chunks, or the AI SDK's UI message stream. */
 export type ChatFormat = 'v1' | 'legacy' | 'ai-sdk';
+
+/** A visitor the host site signed in, from the session token. */
+interface SignedInUser {
+  uid: string;
+  tier?: string;
+}
 
 export interface StartChatOptions {
   signal?: AbortSignal;
@@ -559,7 +597,7 @@ export function describeBudgets(budgets: Budgets, defaulted: BudgetScope[] = [])
     parts.push(`${caps.join(' and ')} ${SCOPE_LABELS[scope]}${defaulted.includes(scope) ? ' (default)' : ''}`);
   }
   const noTotal = budgets.globalPerDay ? '' : ' No daily total is set; `budgets.globalPerDay` caps your whole bill.';
-  return `[chatcops] Budgets: ${parts.join(', ')}.${noTotal} Set \`budgets\` to change them, or \`budgets: false\` to turn them off.`;
+  return `Budgets: ${parts.join(', ')}.${noTotal} Set \`budgets\` to change them, or \`budgets: false\` to turn them off.`;
 }
 
 /** Vercel, AWS Lambda, Netlify and Cloudflare Workers, where memory doesn't last. */

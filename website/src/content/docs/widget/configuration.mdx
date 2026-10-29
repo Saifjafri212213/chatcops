@@ -67,9 +67,9 @@ ChatCops.init({
 
   // Theme
   theme: {
-    accent: '#6366f1',
-    textColor: '#FAFAF9',
-    bgColor: '#0A0A0A',
+    mode: 'auto',               // 'light' | 'dark' | 'auto' (follows the system)
+    accent: '#4f46e5',
+    accentDark: '#a5b4fc',      // optional accent for dark mode
     fontFamily: 'Inter, sans-serif',
     borderRadius: '12',
     position: 'bottom-right',   // 'bottom-right' | 'bottom-left'
@@ -84,6 +84,7 @@ ChatCops.init({
 
   // Behavior
   welcomeMessage: 'Hi! How can I help you today?',
+  suggestions: ['Compare plans', 'Book a demo'],
   welcomeBubble: {
     text: 'Need help? Chat with us!',
     delay: 3000,
@@ -109,7 +110,7 @@ ChatCops.init({
     subtitle: 'Online',
   },
   welcomeMessage: 'Hi! How can I help you today?',
-  persistHistory: false,
+  persistence: 'none',
 });
 ```
 
@@ -134,6 +135,53 @@ new Widget({
 
 If you leave `siteId` out, the first widget keeps the default storage and the next one is given its own, with a note in the console. The first widget's host element has the id `chatcops-root`; later ones get `chatcops-root-2` and so on, and every host has the class `chatcops-root`.
 
+### Saved conversations
+
+The widget keeps the conversation so a visitor who reloads the page or comes back later picks up where they left off. `persistence` picks where:
+
+| Value | Kept in | Lasts |
+|-------|---------|-------|
+| `'local'` (default) | `localStorage` | Until `historyTtlDays` passes, 30 days by default |
+| `'session'` | `sessionStorage` | Until the tab is closed |
+| `'none'` | Memory | Until the page reloads |
+
+```typescript
+ChatCops.init({
+  apiUrl: '/api/chat',
+  persistence: 'session',
+});
+
+// Or keep it in the browser, for a week
+ChatCops.init({
+  apiUrl: '/api/chat',
+  historyTtlDays: 7,
+});
+```
+
+A popup doesn't read or write storage until the visitor opens it. Until then, nothing is stored on the visitor's device. An inline chat is on screen from the start, so it reads its saved conversation when it mounts. The one exception is a welcome bubble with `showOnce`. It checks and sets its own flag when it's due to appear, and stores nothing before that. With `persistence: 'none'` nothing at all is written to storage, the bubble flag included.
+
+The pre-chat form's answers are saved with the conversation, so they expire with it too.
+
+`persistHistory` is deprecated. `persistHistory: false` still works and means `persistence: 'none'`. It goes away in 1.0.
+
+### AI disclosure
+
+A new conversation starts with a short note: "You're chatting with an AI assistant. It can make mistakes." The EU AI Act (Article 50) asks that people know when they're talking to an AI, and the note stays at the top of the chat, also after "New conversation". Its strings are `disclosure` and `disclosureLearnMore` in the locale, and a language that doesn't have them yet shows them in English.
+
+Change the wording, or add a link to a page that explains more:
+
+```typescript
+ChatCops.init({
+  apiUrl: '/api/chat',
+  disclosure: {
+    text: 'Acme Assistant is an AI. It can get things wrong, so check anything important.',
+    learnMoreUrl: 'https://acme.com/ai',
+  },
+});
+```
+
+`disclosure: false` (or `data-disclosure="false"`) removes it. The widget then logs a note in the console, because telling visitors some other way is up to you.
+
 ### Streaming inactivity timeout
 
 Set `timeout` in `ChatCops.init()` to change the inactivity timeout in milliseconds.
@@ -149,11 +197,25 @@ option is available through programmatic configuration.
 
 ## WidgetConfig Interface
 
+`WidgetConfig` and the types it's made of are all exported from `@chatcops/widget`, so a site can type its own pieces of a config:
+
 ```typescript
+import type { PreChatFormConfig, ThemeConfig } from '@chatcops/widget';
+
+const brand: ThemeConfig = { mode: 'auto', accent: '#2563eb', borderRadius: 12 };
+const leadForm: PreChatFormConfig = {
+  enabled: true,
+  fields: [{ name: 'email', label: 'Work email', type: 'email', required: true }],
+};
+```
+
+```typescript
+// docs-check: skip, a reference listing rather than code to run
 interface WidgetConfig {
   apiUrl: string;
   timeout?: number;              // Inactivity timeout in ms, default: 30000
   turnstileSiteKey?: string;     // Cloudflare Turnstile site key, when the server has `turnstile` set
+  userToken?: string;            // Your server's signed token for a signed-in visitor (server `identity`)
 
   // Display mode
   mode?: 'popup' | 'inline';       // Default: 'popup'
@@ -161,9 +223,11 @@ interface WidgetConfig {
   siteId?: string;                 // Names the saved conversation; set one per widget when a page has several
 
   theme?: {
-    accent?: string;          // Hex color, default: '#6366f1'
-    textColor?: string;       // Hex color, default: '#ffffff'
-    bgColor?: string;         // Hex color, default: '#0a0a0a'
+    mode?: 'light' | 'dark' | 'auto';  // Default: 'auto', which follows the system setting
+    accent?: string;          // Hex color, default: '#4f46e5' (light), '#6366f1' (dark)
+    accentDark?: string;      // Hex color, the accent in dark mode. Default: accent
+    textColor?: string;       // Hex color, replaces the text color in every mode
+    bgColor?: string;         // Hex color, replaces the background in every mode
     fontFamily?: string;      // CSS font-family
     borderRadius?: string | number;  // px if a number or numeric string (12, '12'), or any CSS length ('1rem'). Default: 12
     position?: 'bottom-right' | 'bottom-left';
@@ -176,17 +240,25 @@ interface WidgetConfig {
   };
 
   welcomeMessage?: string;    // First assistant message
+  disclosure?: false | {      // The "you're chatting with an AI" note, on by default
+    text?: string;            // Replaces the wording
+    learnMoreUrl?: string;    // Adds a "Learn more" link (http or https)
+  };
+  suggestions?: string[];     // Suggested question buttons shown in a new conversation
   welcomeBubble?: {           // Popup mode only
     text: string;             // Text shown on hover bubble
     delay?: number;           // ms before bubble appears
     showOnce?: boolean;       // Only show once per session
   };
   placeholder?: string;       // Input placeholder text
-  persistHistory?: boolean;   // Save chat history, default: true
+  persistence?: 'local' | 'session' | 'none'; // Where the chat is saved, default: 'local'
+  historyTtlDays?: number;    // Drop saved chats older than this, default: 30
+  persistHistory?: boolean;   // Deprecated. false is the same as persistence: 'none'
   maxMessages?: number;       // Max messages to persist, default: 50
   pageContext?: boolean;       // Send page URL/title, default: true
   autoOpen?: boolean | number; // Popup mode only. true = immediate, number = delay in ms
   locale?: string;            // Sent to the server with each message. Only English strings are built in
+  dir?: 'ltr' | 'rtl' | 'auto'; // Text direction; defaults from locale, then document direction
   strings?: Partial<WidgetLocaleStrings>; // Custom i18n overrides
   preChatForm?: {
     enabled: boolean;
@@ -222,7 +294,9 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | `data-api-url` | `apiUrl` | API endpoint URL (required) |
 | `data-mode` | `mode` | `'popup'` or `'inline'` |
 | `data-container` | `container` | CSS selector for inline container |
+| `data-theme-mode` | `theme.mode` | `'light'`, `'dark'` or `'auto'` |
 | `data-accent` | `theme.accent` | Primary accent color |
+| `data-accent-dark` | `theme.accentDark` | Accent color in dark mode |
 | `data-text-color` | `theme.textColor` | Primary text color |
 | `data-bg-color` | `theme.bgColor` | Background color |
 | `data-font-family` | `theme.fontFamily` | Font family |
@@ -232,12 +306,19 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | `data-brand-avatar` | `branding.avatar` | Avatar image URL |
 | `data-brand-subtitle` | `branding.subtitle` | Subtitle text |
 | `data-welcome-message` | `welcomeMessage` | First assistant message |
+| `data-disclosure` | `disclosure` | `"false"` turns the AI disclosure off |
+| `data-disclosure-text` | `disclosure.text` | Wording of the AI disclosure |
+| `data-disclosure-url` | `disclosure.learnMoreUrl` | "Learn more" link in the AI disclosure |
 | `data-welcome-bubble` | `welcomeBubble.text` | Welcome bubble text |
 | `data-welcome-bubble-delay` | `welcomeBubble.delay` | Bubble delay in ms |
 | `data-placeholder` | `placeholder` | Input placeholder |
 | `data-auto-open` | `autoOpen` | Auto-open delay in ms or `true` |
 | `data-locale` | `locale` | Language code |
+| `data-dir` | `dir` | Text direction: `'ltr'`, `'rtl'` or `'auto'` |
+| `data-persistence` | `persistence` | `'local'`, `'session'` or `'none'` |
+| `data-history-ttl-days` | `historyTtlDays` | Days a saved conversation is kept |
 | `data-turnstile-site-key` | `turnstileSiteKey` | Cloudflare Turnstile site key, when the server checks Turnstile |
+| `data-user-token` | `userToken` | Signed token for a signed-in visitor, when the server has `identity` set |
 
 ## CSS Custom Properties
 
@@ -259,6 +340,7 @@ The widget uses Shadow DOM and exposes these CSS custom properties on its host e
 | `--cc-fab-size` | FAB button size | `56px` |
 | `--cc-panel-width` | Chat panel width | `400px` |
 | `--cc-panel-height` | Chat panel height | `560px` |
+| `--cc-focus-ring` | Focus ring | `0 0 0 2px var(--cc-bg), 0 0 0 4px var(--cc-accent)` |
 
 ## Inline Mode Behavior
 

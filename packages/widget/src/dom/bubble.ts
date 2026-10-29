@@ -1,5 +1,9 @@
+import type { KeyStore } from '../storage.js';
+
 export interface BubbleOptions {
   text: string;
+  /** Where "already shown" is remembered, with the widget's persistence. */
+  store: KeyStore;
   delay?: number;
   showOnce?: boolean;
   position: 'bottom-right' | 'bottom-left';
@@ -20,8 +24,16 @@ export class WelcomeBubble {
       this.el.classList.add('cc-left');
     }
 
-    this.el.textContent = options.text;
     this.setHidden(true);
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'cc-bubble-trigger';
+    trigger.textContent = options.text;
+    trigger.addEventListener('click', () => {
+      this.hide();
+      options.onClick();
+    });
 
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
@@ -32,25 +44,17 @@ export class WelcomeBubble {
       e.stopPropagation();
       this.hide();
     });
-    this.el.appendChild(closeBtn);
-
-    this.el.addEventListener('click', () => {
-      this.hide();
-      options.onClick();
-    });
+    this.el.append(trigger, closeBtn);
 
     root.appendChild(this.el);
 
-    if (options.showOnce) {
-      try {
-        if (sessionStorage.getItem(BUBBLE_SHOWN_KEY)) return;
-        sessionStorage.setItem(BUBBLE_SHOWN_KEY, '1');
-      } catch {
-        // Ignore
-      }
-    }
-
+    // Checked when the bubble is due, not before, so a page that never shows
+    // it never touches storage.
     this.timerId = setTimeout(() => {
+      if (options.showOnce) {
+        if (options.store.get(BUBBLE_SHOWN_KEY)) return;
+        options.store.set(BUBBLE_SHOWN_KEY, '1');
+      }
       this.el.classList.add('cc-visible');
       this.setHidden(false);
     }, options.delay ?? 3000);

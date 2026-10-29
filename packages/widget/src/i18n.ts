@@ -29,6 +29,11 @@ export interface WidgetLocaleStrings {
   preChatInvalidEmail: string;
   retryButton: string;
   regenerateButton: string;
+  suggestionsLabel: string;
+  unreadCount: string;
+  sourcesLabel: string;
+  disclosure: string;
+  disclosureLearnMore: string;
 }
 
 const en: WidgetLocaleStrings = {
@@ -61,6 +66,11 @@ const en: WidgetLocaleStrings = {
   preChatInvalidEmail: 'Please enter a valid email',
   retryButton: 'Retry',
   regenerateButton: 'Regenerate',
+  suggestionsLabel: 'Suggested questions',
+  unreadCount: '{count} unread',
+  sourcesLabel: 'Sources',
+  disclosure: "You're chatting with an AI assistant. It can make mistakes.",
+  disclosureLearnMore: 'Learn more',
 };
 
 const locales: Record<string, WidgetLocaleStrings> = { en };
@@ -70,6 +80,7 @@ export function getWidgetLocale(code: string, overrides?: Partial<WidgetLocaleSt
   return overrides ? { ...base, ...overrides } : base;
 }
 
-export function registerWidgetLocale(code: string, strings: WidgetLocaleStrings): void {
-  locales[code] = strings;
+/** Adds or replaces a language. Strings it leaves out stay in English. */
+export function registerWidgetLocale(code: string, strings: Partial<WidgetLocaleStrings>): void {
+  locales[code] = { ...en, ...strings };
 }

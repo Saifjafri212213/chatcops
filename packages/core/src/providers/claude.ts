@@ -12,8 +12,10 @@ import type { AIProvider } from './base.js';
 import { chatSyncViaTurn, chatViaTurn } from '../agent/chat.js';
 import { joinSystem } from '../agent/run-turn.js';
 import { DEFAULT_MAX_TOKENS, toClaudeTools, warnOnce } from './base.js';
+import { consoleLogger, type Logger } from '../logger.js';
 import { normalizeTurns, type TurnPart } from './history.js';
 import type { FinishReason, ProviderEvent, ProviderStepParams } from './types.js';
+import type { RetrievedChunk } from '../retrieval/types.js';
 
 const DEFAULT_MODEL = 'claude-haiku-5-5';
 const DEFAULT_EFFORT: ProviderEffort = 'low';
@@ -41,7 +43,11 @@ export function claudeSupportsEffort(model: string): boolean {
   return version.family === 'opus' && version.major === 4 && version.minor === 5;
 }
 
-/** Fable, Mythos, every 5.x model and Opus 4.7+ reject non-default `temperature`. */
+/**
+ * Fable, Mythos, every 5.x model and Opus 4.7+ reject non-default `temperature`.
+ * Since API version 2026-10-21 no Claude model takes it, so the provider no
+ * longer uses this; it stays exported for code that does.
+ */
 export function claudeRejectsTemperature(model: string): boolean {
   const version = parseClaudeModel(model);
   if (!version) return false;
@@ -105,9 +111,11 @@ const isToolResultBlock = (block: ContentBlockParam) => block.type === 'tool_res
  * their signatures, as Claude requires within a tool loop.
  */
 export function toClaudeStepMessages(messages: ChatMessage[]): MessageParam[] {
-  const out: { role: MessageParam['role']; content: ContentBlockParam[] }[] = [];
+  // Only user and assistant turns: the system prompt goes in `system`.
+  type Role = 'user' | 'assistant';
+  const out: { role: Role; content: ContentBlockParam[] }[] = [];
 
-  const push = (role: MessageParam['role'], blocks: ContentBlockParam[]) => {
+  const push = (role: Role, blocks: ContentBlockParam[]) => {
     if (blocks.length === 0) return;
     const last = out.at(-1);
     if (!last || last.role !== role) {
@@ -123,7 +131,7 @@ export function toClaudeStepMessages(messages: ChatMessage[]): MessageParam[] {
   };
 
   for (const turn of normalizeTurns(messages)) {
-    let role: MessageParam['role'] = turn.role;
+    let role: Role = turn.role;
     let run: ContentBlockParam[] = [];
     for (const part of turn.parts) {
       const block = toClaudeBlock(part);
@@ -204,13 +212,17 @@ function toUsage(usage: Anthropic.Messages.Usage | undefined): TokenUsage {
 }
 
 export class ClaudeProvider implements AIProvider {
+  /** Retrieved chunks go to Claude as `search_result` blocks, and it cites them natively. */
+  readonly citations = 'native' as const;
   name = 'claude';
   private client: Anthropic;
   readonly model: string;
   private effort: ProviderEffort | undefined;
   private promptCaching: boolean;
+  private readonly logger: Logger;
 
   constructor(config: ProviderConfig) {
+    this.logger = config.logger ?? consoleLogger();
     if (!config.apiKey?.trim()) throw new Error('claude requires apiKey');
     this.client = new Anthropic({
       apiKey: config.apiKey,
@@ -223,7 +235,7 @@ export class ClaudeProvider implements AIProvider {
     if (claudeSupportsEffort(this.model)) {
       this.effort = config.effort ?? DEFAULT_EFFORT;
     } else if (config.effort) {
-      warnOnce(`claude-effort-${this.model}`, `${this.model} has no effort setting, so \`effort\` is ignored.`);
+      warnOnce(this.logger, `claude-effort-${this.model}`, `${this.model} has no effort setting, so \`effort\` is ignored.`);
     }
   }
 
@@ -244,13 +256,14 @@ export class ClaudeProvider implements AIProvider {
     params: Pick<ProviderStepParams, 'systemPrompt' | 'systemContext' | 'tools' | 'maxTokens' | 'temperature'>,
     messages: Anthropic.Messages.MessageParam[]
   ) {
-    let temperature = params.temperature;
-    if (temperature != null && claudeRejectsTemperature(this.model)) {
+    // API version 2026-10-21 removed `temperature` for every Claude model:
+    // sending it is a 400, so it's never sent.
+    if (params.temperature != null) {
       warnOnce(
-        `claude-temperature-${this.model}`,
-        `${this.model} doesn't accept \`temperature\`, so it is not sent. Use \`effort\` to trade speed for depth.`
+        this.logger,
+        'claude-temperature',
+        "Claude's API no longer accepts `temperature`, so it is not sent. Use `effort` to trade speed for depth."
       );
-      temperature = undefined;
     }
 
     return {
@@ -259,7 +272,6 @@ export class ClaudeProvider implements AIProvider {
       system: this.system(params),
       messages,
       ...(params.tools?.length ? { tools: toClaudeTools(params.tools) } : {}),
-      ...(temperature != null ? { temperature } : {}),
       ...(this.effort ? { output_config: { effort: this.effort } } : {}),
     } satisfies Anthropic.Messages.MessageCreateParamsNonStreaming;
   }
@@ -268,7 +280,7 @@ export class ClaudeProvider implements AIProvider {
   async *step(params: ProviderStepParams): AsyncGenerator<ProviderEvent> {
     params.signal?.throwIfAborted();
     const stream = this.client.messages.stream(
-      this.request(params, toClaudeStepMessages(params.messages)),
+      this.request(params, withSearchResults(toClaudeStepMessages(params.messages), params.sources)),
       { signal: params.signal }
     );
 
@@ -276,6 +288,9 @@ export class ClaudeProvider implements AIProvider {
       if (event.type !== 'content_block_delta') continue;
       if (event.delta.type === 'text_delta') yield { type: 'text-delta', delta: event.delta.text };
       else if (event.delta.type === 'thinking_delta') yield { type: 'reasoning-delta', delta: event.delta.thinking };
+      else if (event.delta.type === 'citations_delta' && event.delta.citation.type === 'search_result_location') {
+        yield { type: 'source', index: event.delta.citation.search_result_index };
+      }
     }
 
     const message = await stream.finalMessage();
@@ -312,4 +327,33 @@ export class ClaudeProvider implements AIProvider {
   chatSync(params: ProviderChatParams): Promise<string> {
     return chatSyncViaTurn(this, params);
   }
+}
+
+/**
+ * Puts retrieved chunks before the visitor's latest message as `search_result`
+ * blocks, so Claude can cite them by index. Retrieved text travels as
+ * content, never in the system prompt. Tool results after it are left alone.
+ */
+export function withSearchResults(messages: MessageParam[], sources: RetrievedChunk[] | undefined): MessageParam[] {
+  if (!sources?.length) return messages;
+  const index = findLastIndex(messages, (message) =>
+    message.role === 'user' &&
+    (typeof message.content === 'string' || message.content.some((block) => block.type !== 'tool_result'))
+  );
+  if (index === -1) return messages;
+  const target = messages[index];
+  const blocks: ContentBlockParam[] = sources.map((chunk) => ({
+    type: 'search_result',
+    source: chunk.source.url,
+    title: [chunk.source.title, chunk.source.section].filter(Boolean).join(' > ') || chunk.source.url,
+    content: [{ type: 'text', text: chunk.text }],
+    citations: { enabled: true },
+  }));
+  const content = typeof target.content === 'string' ? [{ type: 'text' as const, text: target.content }] : target.content;
+  return messages.map((message, i) => (i === index ? { role: 'user', content: [...blocks, ...content] } : message));
+}
+
+function findLastIndex<T>(items: T[], test: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i--) if (test(items[i])) return i;
+  return -1;
 }

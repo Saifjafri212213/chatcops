@@ -34,6 +34,7 @@ export type {
   HandoffPart,
 } from './types.js';
 export { partsOf, messageText } from './parts.js';
+export { consoleLogger, jsonLogger, silentLogger, type Logger, type LogFields, type JsonLoggerOptions } from './logger.js';
 
 // Wire protocol
 export { PROTOCOL_VERSION, encodeSSE, SSE_PING, SSE_DONE, SSE_HEADERS, statusForError, errorBody, describeInvalidRequest, toLegacyChunk, aiSdkEncoder, fromAiSdkRequest, AI_SDK_STREAM_HEADER } from './protocol/index.js';
@@ -86,6 +87,49 @@ export { toolToDefinition, LeadCaptureTool } from './tools/index.js';
 export type { KnowledgeSource, FAQPair } from './knowledge/index.js';
 export { TextKnowledgeSource, FAQKnowledgeSource } from './knowledge/index.js';
 
+// Retrieval
+export type {
+  Embedder,
+  RetrievedChunk,
+  RetrievalQuery,
+  Retriever,
+  Reranker,
+  OpenAIEmbedderOptions,
+  GeminiEmbedderOptions,
+  VoyageEmbedderOptions,
+  VoyageRerankerOptions,
+  CohereRerankerOptions,
+  WorkersAiBinding,
+  WorkersAiEmbedderOptions,
+  WorkersAiRerankerOptions,
+  RetrieverKnowledgeOptions,
+  VectorRetrieverOptions,
+  HybridRetrieverOptions,
+} from './retrieval/index.js';
+export {
+  openaiEmbedder,
+  geminiEmbedder,
+  voyageEmbedder,
+  voyageReranker,
+  cohereReranker,
+  workersAiEmbedder,
+  workersAiReranker,
+  retrieverKnowledge,
+  formatSources,
+  uniqueChunks,
+  SOURCES_INSTRUCTION,
+  vectorRetriever,
+  hybridRetriever,
+  reciprocalRankFusion,
+  retrievalQueryText,
+  CitationParser,
+  parseCitations,
+  sourcePart,
+  sourcesContext,
+  CITE_INSTRUCTION,
+  NATIVE_SOURCES_INSTRUCTION,
+} from './retrieval/index.js';
+
 // Conversation
 export type { ConversationStore } from './conversation/index.js';
 export { ConversationManager, MemoryStore } from './conversation/index.js';
@@ -105,12 +149,24 @@ export type {
   ListQuery,
   MemoryStorageOptions,
   ConversationStoreWithAppend,
+  KeywordQuery,
+  MetadataFilter,
+  MetadataValue,
+  ScoredRecord,
+  VectorQuery,
+  VectorRecord,
+  VectorSource,
+  VectorStore,
+  MemoryVectorsOptions,
 } from './storage/index.js';
 export {
   ConflictError,
   isConflictError,
   CONFLICT_ERROR_CODE,
   memoryStorage,
+  memoryVectors,
+  matchesFilter,
+  segmentWords,
   withAppend,
   isLegacyConversationStore,
 } from './storage/index.js';
@@ -124,7 +180,7 @@ export { createRateLimiter } from './limits/rate-limit.js';
 export type { RateLimitRule, RateLimitResult, RateLimiterOptions } from './limits/rate-limit.js';
 
 // Analytics
-export { AnalyticsCollector, BufferedEventSink, statsFromSink } from './analytics/index.js';
+export { AnalyticsCollector, BufferedEventSink, statsFromSink, ANALYTICS_EVENTS } from './analytics/index.js';
 export type { AnalyticsStats } from './analytics/index.js';
 
 // i18n

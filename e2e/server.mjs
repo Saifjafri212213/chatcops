@@ -24,6 +24,11 @@ const files = {
   '/legacy-cross-origin.html': ['fixtures/legacy-cross-origin.html', 'text/html'],
   '/slow-tool.html': ['fixtures/slow-tool.html', 'text/html'],
   '/sessions.html': ['fixtures/sessions.html', 'text/html'],
+  '/full.html': ['fixtures/full.html', 'text/html'],
+  '/theme.html': ['fixtures/theme.html', 'text/html'],
+  '/prechat.html': ['fixtures/prechat.html', 'text/html'],
+  '/locale.html': ['fixtures/locale.html', 'text/html'],
+  '/locales/zz.js': ['fixtures/locales/zz.js', 'text/javascript'],
 };
 
 const apiRequests = [];
@@ -54,8 +59,36 @@ const SLOW_TOOL_MS = 4000;
  * - "fail midway": some text, then the model request fails
  * - "cut off": some text, then nothing (the bridge below ends the response)
  * - "slow tool": calls `slow_lookup`, then answers once it returns
+ * - "long reply": about 4,000 words of markdown in small pieces, for the render cost test
+ * - "still streaming": some text, then nothing for a minute, with the response open
+ * - "with sources": a reply that cites the pricing page, found by the knowledge source below
  * - anything else: a normal streamed reply
  */
+/**
+ * About 4,000 words of markdown (paragraphs, lists, bold, a code block),
+ * split into pieces of four words or so, like a model streams them.
+ */
+const LONG_REPLY = (() => {
+  const vocabulary = 'the plan includes support for teams that need a fast answer about pricing refunds and setup'.split(' ');
+  const blocks = [];
+  let words = 0;
+  for (let n = 0; words < 4000; n++) {
+    if (n % 6 === 5) {
+      blocks.push(['- **First** item of the list', '- second item, with `code`', '- third item'].join('\n'));
+      words += 16;
+    } else if (n === 20) {
+      blocks.push('```\nnpm install @chatcops/widget\n\nnpx chatcops test\n```');
+      words += 6;
+    } else {
+      const paragraph = Array.from({ length: 60 }, (_, i) => vocabulary[(n * 7 + i) % vocabulary.length]).join(' ');
+      blocks.push(`${paragraph.charAt(0).toUpperCase()}${paragraph.slice(1)}.`);
+      words += 60;
+    }
+  }
+  const pieces = blocks.join('\n\n').match(/(?:\S+\s*){1,4}|\s+/g);
+  return pieces;
+})();
+
 const provider = {
   name: 'e2e',
   model: 'e2e',
@@ -81,10 +114,25 @@ const provider = {
       return;
     }
 
-    const words = /slow tool/i.test(askedText) ? ['Found', ' it.'] : /fail midway|cut off/i.test(askedText) ? REPLY.slice(0, 3) : REPLY;
+    if (/long reply/i.test(askedText)) {
+      for (const delta of LONG_REPLY) {
+        await sleep(1, signal);
+        yield { type: 'text-delta', delta };
+      }
+      yield { type: 'finish', reason: 'stop', usage: { inputTokens: 1, outputTokens: 1 }, parts: [{ type: 'text', text: LONG_REPLY.join('') }] };
+      return;
+    }
+
+    const words = /slow tool/i.test(askedText)
+      ? ['Found', ' it.']
+      : /with sources/i.test(askedText)
+        ? ['Plans start', ' at $19', ' a month [1].']
+        : /fail midway|cut off|still streaming/i.test(askedText)
+          ? REPLY.slice(0, 3)
+          : REPLY;
     yield* text(words);
     if (/fail midway/i.test(askedText)) throw new Error('The e2e provider failed on purpose.');
-    if (/cut off/i.test(askedText)) await sleep(60_000, signal);
+    if (/cut off|still streaming/i.test(askedText)) await sleep(60_000, signal);
     yield {
       type: 'finish',
       reason: 'stop',
@@ -104,10 +152,28 @@ const slowLookup = {
   },
 };
 
+/** Finds the pricing page for "with sources", and nothing otherwise. */
+const pricingPage = {
+  type: 'e2e',
+  async getContext() {
+    return '';
+  },
+  async retrieve({ text }) {
+    if (!/with sources/i.test(text)) return [];
+    return [{
+      id: 'pricing#0',
+      text: 'Plans start at $19 a month.',
+      score: 1,
+      source: { id: 'pricing', url: 'https://example.com/pricing', title: 'Pricing' },
+    }];
+  },
+};
+
 function chatEndpoint(overrides = {}) {
   const config = {
     provider,
     systemPrompt: 'e2e',
+    knowledge: [pricingPage],
     tools: [slowLookup],
     toolTimeoutMs: 30_000,
     budgets: false,
@@ -189,14 +255,11 @@ const server = createServer(async (req, res) => {
     const endpoint = Object.entries(endpoints).find(([path]) => url.pathname === path || url.pathname === `${path}/session`);
     if (endpoint) return await serveFetch(endpoint[1], req, res);
 
-    if (url.pathname === '/chatcops.esm.js') {
-      const js = await readFile(join(root, 'packages/widget/dist/chatcops.esm.js'));
-      res.writeHead(200, { 'Content-Type': 'text/javascript' });
-      return res.end(js);
-    }
-
-    if (url.pathname === '/chatcops.min.js') {
-      const js = await readFile(join(root, 'packages/widget/dist/chatcops.min.js'));
+    // The widget builds: chatcops.min.js (loader), chatcops.panel.js and the chunks it loads,
+    // chatcops.full.min.js, chatcops.esm.js.
+    const widgetFile = /^\/(chatcops\.(?:min|panel|full\.min|esm)\.js|chunks\/[\w-]+\.js)$/.exec(url.pathname)?.[1];
+    if (widgetFile) {
+      const js = await readFile(join(root, 'packages/widget/dist', widgetFile));
       res.writeHead(200, { 'Content-Type': 'text/javascript' });
       return res.end(js);
     }
