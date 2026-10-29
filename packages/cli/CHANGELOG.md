@@ -55,4 +55,4 @@
 - Updated dependencies [a029c43]
   - @chatcops/server@0.7.0
   - @chatcops/core@0.6.0
-  - @chatcops/ingest@1.0.0
+  - @chatcops/ingest@0.1.0
