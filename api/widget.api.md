@@ -87,6 +87,7 @@ export declare class Widget {
     get isInline(): boolean;
     constructor(config: WidgetConfig);
     init(): void;
+    setConsent(consent: boolean): void;
     open(): void;
     close(): void;
     toggle(): void;
@@ -148,6 +149,8 @@ export interface WidgetConfig {
     onError?: (error: Error) => void;
     onLeadCaptured?: (leadData?: Record<string, unknown>) => void;
     onPreChatSubmit?: (data: Record<string, string>) => void;
+    waitForConsent?: boolean;
+    onConsentRequest?: () => void;
 }
 
 export type WidgetEventHandler<E extends WidgetEventType = WidgetEventType> = (...args: WidgetEvents[E]) => void;
@@ -208,6 +211,8 @@ export interface WidgetLocaleStrings {
     sourcesLabel: string;
     disclosure: string;
     disclosureLearnMore: string;
+    consentNotice: string;
+    consentButton: string;
 }
 
 export type WidgetUpdate = Pick<WidgetConfig, 'branding' | 'welcomeMessage' | 'disclosure' | 'suggestions' | 'placeholder' | 'strings'> & {

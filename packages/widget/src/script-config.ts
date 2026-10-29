@@ -54,5 +54,6 @@ export function configFromScript(script: HTMLScriptElement): WidgetConfig | unde
     dir: (['ltr', 'rtl', 'auto'] as const).find((dir) => dir === script.dataset.dir),
     persistence: (['local', 'session', 'none'] as const).find((mode) => mode === script.dataset.persistence),
     historyTtlDays: /^\d+$/.test(script.dataset.historyTtlDays ?? '') ? Number(script.dataset.historyTtlDays) : undefined,
+    waitForConsent: script.dataset.waitForConsent === undefined ? undefined : script.dataset.waitForConsent !== 'false',
   };
 }
