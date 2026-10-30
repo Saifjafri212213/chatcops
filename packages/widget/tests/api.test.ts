@@ -441,6 +441,25 @@ describe('the script tag loader API', () => {
     loader.destroy();
   });
 
+  it('keeps a token function given to setUser() until the chat loads, and passes it on as it is', async () => {
+    const load = panel();
+    const loader = createLoader(load);
+    const token = vi.fn(async () => 'fresh.token');
+    loader.init({ apiUrl: '/chat' });
+    loader.setUser({ token });
+    await tick();
+    expect(load).not.toHaveBeenCalled();
+    expect(token).not.toHaveBeenCalled();
+
+    const setUser = vi.spyOn(Widget.prototype, 'setUser');
+    loader.open();
+    await tick();
+    await tick();
+    expect(setUser).toHaveBeenCalledWith({ token });
+    expect(token).not.toHaveBeenCalled();
+    loader.destroy();
+  });
+
   it('registerLocale uses the strings without fetching a file, and passes the direction to the panel', async () => {
     const loadLocale = vi.fn();
     const loader = createLoader(panel(), loadLocale);

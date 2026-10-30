@@ -134,15 +134,19 @@ ChatCops.off('open', onOpen);
 
 Tell the widget who the signed-in visitor is.
 
-- `token` is the identity token for [signed-in visitors](/server/setup/#signed-in-visitors), which your server signs.
+- `token` is the identity token for [signed-in visitors](/server/setup/#signed-in-visitors), which your server signs. It can also be a function (sync or async) that returns a fresh token each time the widget asks for a session, the same as [`userToken`](/server/setup/#a-fresh-token-for-each-session).
 - `name` and `email` are sent to the bot as visitor details with the first message of a conversation, and the name greets them.
 
-Switching to another user, or `setUser(null)` when the visitor signs out, clears the chat, so one person's conversation never shows for the next. With the script tag build, a call before the chat has loaded is kept until it does.
+Switching to another user, or `setUser(null)` when the visitor signs out, clears the chat, so one person's conversation never shows for the next. With a function, passing the same function again counts as the same visitor and keeps the chat; a different function, a string or no token counts as another visitor and clears it. Keep one reference to the function if you call `setUser` more than once. With the script tag build, a call before the chat has loaded is kept until it does.
 
 ```typescript
 declare const session: { name: string; email: string; chatToken: string };
 
 ChatCops.setUser({ name: session.name, email: session.email, token: session.chatToken });
+
+// Or, so the token is signed when the chat needs it and cannot have expired:
+const signToken = async () => (await fetch('/api/chat-token')).text();
+ChatCops.setUser({ name: session.name, email: session.email, token: signToken });
 
 // When the visitor signs out:
 ChatCops.setUser(null);

@@ -85,3 +85,81 @@ describe('userToken as a function', () => {
     expect(sent()).toEqual(['fixed.token']);
   });
 });
+
+describe('setUser with a token function', () => {
+  type Internals = { messages: Array<{ role: string; content: string }> };
+  const said = (w: Widget, text: string) => (w as unknown as Internals).messages.some((m) => m.content === text);
+  const remember = (w: Widget, text: string) => (w as unknown as Internals).messages.push({ role: 'user', content: text });
+
+  it('calls the function when a session is requested, not when setUser() is called', async () => {
+    const sent = sessionRequests();
+    const token = vi.fn(async () => 'fresh.from.setUser');
+    widget = new Widget({ apiUrl: API });
+    widget.init();
+    widget.setUser({ name: 'Ada', token });
+    expect(token).not.toHaveBeenCalled();
+
+    await widget.sendMessage('Hello');
+    expect(token).toHaveBeenCalledTimes(1);
+    expect(sent()).toEqual(['fresh.from.setUser']);
+  });
+
+  it('keeps the chat when the same function is passed again', () => {
+    widget = new Widget({ apiUrl: API });
+    widget.init();
+    const token = () => 'signed';
+    widget.setUser({ token });
+    remember(widget, 'A question');
+    widget.setUser({ name: 'Ada', token });
+    expect(said(widget, 'A question')).toBe(true);
+  });
+
+  it('clears the chat for a different function, a string, or null', () => {
+    widget = new Widget({ apiUrl: API });
+    widget.init();
+    const first = () => 'one';
+    for (const next of [() => 'one', 'a.string.token', undefined, null] as const) {
+      widget.setUser({ token: first });
+      remember(widget, 'Visitor A wrote this');
+      widget.setUser(next === null ? null : { token: next });
+      expect(said(widget, 'Visitor A wrote this')).toBe(false);
+    }
+  });
+
+  it('clears the chat when a function is replaced by a user with no token', () => {
+    widget = new Widget({ apiUrl: API });
+    widget.init();
+    widget.setUser({ token: () => 'one' });
+    remember(widget, 'A question');
+    widget.setUser({ name: 'Ada' });
+    expect(said(widget, 'A question')).toBe(false);
+  });
+
+  it('keeps the chat when a function is given to a visitor who was anonymous', () => {
+    widget = new Widget({ apiUrl: API });
+    widget.init();
+    remember(widget, 'A question');
+    widget.setUser({ token: () => 'signed' });
+    expect(said(widget, 'A question')).toBe(true);
+  });
+
+  it('takes a function through ChatCops.setUser() in the npm and single-file builds', async () => {
+    const sent = sessionRequests();
+    widget = ChatCops.init({ apiUrl: API });
+    ChatCops.setUser({ token: async () => 'through.ChatCops' });
+    await ChatCops.sendMessage('Hello');
+    expect(sent()).toEqual(['through.ChatCops']);
+  });
+
+  it('is replaced by a later string, which is sent instead', async () => {
+    const sent = sessionRequests();
+    const token = vi.fn(() => 'from.function');
+    widget = new Widget({ apiUrl: API });
+    widget.init();
+    widget.setUser({ token });
+    widget.setUser({ token: 'a.string.token' });
+    await widget.sendMessage('Hello');
+    expect(sent()).toEqual(['a.string.token']);
+    expect(token).not.toHaveBeenCalled();
+  });
+});

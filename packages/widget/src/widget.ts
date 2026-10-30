@@ -493,12 +493,14 @@ export class Widget {
 
   /**
    * The signed-in visitor. `token` is the identity token for the server
-   * (signed-in visitors); `name` and `email` are sent as visitor details, and
-   * the name greets them. Switching to another user, or signing out with
-   * `null`, clears the chat, so one person's conversation never shows for
-   * the next.
+   * (signed-in visitors), or a function that returns one, as `userToken`
+   * does; `name` and `email` are sent as visitor details, and the name
+   * greets them. Switching to another user, or signing out with `null`,
+   * clears the chat, so one person's conversation never shows for the next.
+   * The same function passed again counts as the same visitor; any other
+   * function, a string or no token counts as another.
    */
-  setUser(user: { name?: string; email?: string; token?: string } | null): void {
+  setUser(user: { name?: string; email?: string; token?: UserToken } | null): void {
     const previous = this.client.identity;
     const token = user?.token;
     if (previous !== undefined && previous !== token) this.clear();

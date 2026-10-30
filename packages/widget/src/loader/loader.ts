@@ -4,6 +4,7 @@ import { HOST_ID, nextHostId, resolveDirection, setLanguageDirection } from '../
 import { applyTheme } from '../theme.js';
 import type { WidgetLocaleStrings } from '../i18n.js';
 import type { Widget, WidgetConfig, WidgetEventHandler, WidgetEventType, WidgetUpdate } from '../widget.js';
+import type { UserToken } from '../api/client.js';
 import { VERSION } from '../version.js';
 
 export interface PanelModule {
@@ -31,7 +32,7 @@ export interface ChatCopsLoader {
   /** Adds or replaces a language for `locale`: its strings (English for any left out), and `dir`. */
   registerLocale(code: string, strings: Partial<WidgetLocaleStrings>, options?: { dir?: 'ltr' | 'rtl' }): void;
   /** The signed-in visitor (token, name, email). Another user, or `null`, clears the chat. Kept until the chat loads. */
-  setUser(user: { name?: string; email?: string; token?: string } | null): void;
+  setUser(user: { name?: string; email?: string; token?: UserToken } | null): void;
   /** Details the bot should know for the next messages. `null` removes them. Kept until the chat loads. */
   setContext(data: Record<string, string> | null): void;
   /** Changes the theme, branding or wording of the chat. What you leave out stays as it is. Kept until the chat loads. */
