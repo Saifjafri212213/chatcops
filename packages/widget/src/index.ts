@@ -8,6 +8,7 @@ import {
 import { configFromScript } from './script-config.js';
 import { setLanguageDirection } from './dom/shadow.js';
 import { registerWidgetLocale, type WidgetLocaleStrings } from './i18n.js';
+import type { UserToken } from './api/client.js';
 import { VERSION } from './version.js';
 
 export {
@@ -88,7 +89,7 @@ const ChatCops = {
    * The signed-in visitor: `token` for the server, `name` and `email` as
    * visitor details. Another user, or `null` to sign out, clears the chat.
    */
-  setUser(user: { name?: string; email?: string; token?: string } | null): void {
+  setUser(user: { name?: string; email?: string; token?: UserToken } | null): void {
     instance?.setUser(user);
   },
 

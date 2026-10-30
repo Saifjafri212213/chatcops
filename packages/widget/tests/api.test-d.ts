@@ -26,11 +26,17 @@ describe('the widget API types', () => {
   });
 
   it('types setUser and setContext the same in both builds', () => {
-    type User = { name?: string; email?: string; token?: string } | null;
+    type User = { name?: string; email?: string; token?: UserToken } | null;
     expectTypeOf(ChatCops.setUser).parameters.toEqualTypeOf<[User]>();
     expectTypeOf<ChatCopsLoader['setUser']>().parameters.toEqualTypeOf<[User]>();
     expectTypeOf(ChatCops.setContext).parameters.toEqualTypeOf<[Record<string, string> | null]>();
     expectTypeOf<ChatCopsLoader['setContext']>().parameters.toEqualTypeOf<[Record<string, string> | null]>();
+    // The token is a string or a function, as in `userToken`.
+    ChatCops.setUser({ token: 'signed.token' });
+    ChatCops.setUser({ token: async () => 'signed.token' });
+    ChatCops.setUser({ name: 'Ada', token: () => undefined });
+    // @ts-expect-error: a function has to return a string
+    ChatCops.setUser({ token: () => 42 });
     // @ts-expect-error: context values are strings
     ChatCops.setContext({ seats: 12 });
   });

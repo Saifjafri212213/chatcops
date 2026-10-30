@@ -22,7 +22,7 @@ declare const _default: {
     setUser(user: {
         email?: string;
         name?: string;
-        token?: string;
+        token?: UserToken;
     } | null): void;
     setContext(data: Record<string, string> | null): void;
     setConsent(value: boolean): void;
@@ -102,7 +102,7 @@ export declare class Widget {
     setUser(user: {
         email?: string;
         name?: string;
-        token?: string;
+        token?: UserToken;
     } | null): void;
     setContext(data: Record<string, string> | null): void;
     update(changes: WidgetUpdate): void;
