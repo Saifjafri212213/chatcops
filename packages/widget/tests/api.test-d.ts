@@ -34,6 +34,13 @@ describe('the widget API types', () => {
     ChatCops.setContext({ seats: 12 });
   });
 
+  it('types setConsent the same in both builds', () => {
+    expectTypeOf(ChatCops.setConsent).parameters.toEqualTypeOf<[boolean]>();
+    expectTypeOf<ChatCopsLoader['setConsent']>().parameters.toEqualTypeOf<[boolean]>();
+    // @ts-expect-error: consent is a boolean
+    ChatCops.setConsent('yes');
+  });
+
   it('types update() the same in both builds, without position', () => {
     expectTypeOf(ChatCops.update).parameters.toEqualTypeOf<[WidgetUpdate]>();
     expectTypeOf<ChatCopsLoader['update']>().parameters.toEqualTypeOf<[WidgetUpdate]>();

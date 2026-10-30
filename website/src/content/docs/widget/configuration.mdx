@@ -169,6 +169,8 @@ The pre-chat form's answers are saved with the conversation, so they expire with
 A site under a strict consent policy can hold the chat back until the visitor accepts functional cookies. Set `waitForConsent` (or `data-wait-for-consent` on the script tag) and the launcher shows as usual, but opening the chat shows a notice instead of the conversation: "Chat is available once you accept functional cookies." While it waits, the widget reads and writes no `localStorage` or `sessionStorage`, not even to check, and it makes no request to your chat server. The welcome bubble stays hidden too, since it remembers that it was shown.
 
 ```typescript
+declare const consentBanner: { open(): void };
+
 ChatCops.init({
   apiUrl: '/api/chat',
   waitForConsent: true,
@@ -183,7 +185,7 @@ ChatCops.setConsent(true);
 ChatCops.setConsent(false);
 ```
 
-`setConsent(true)` replaces the notice with the normal chat: the saved conversation comes back and the session starts. A chat the visitor has closed stays closed. It works before or after `init()`, and with the script tag build also before the chat has loaded. `setConsent(false)` closes the chat and removes what the widget saved in this browser (the conversation, the session token and the welcome bubble's flag), and the notice shows again on the next open. If the visitor never gave consent in this page view, `setConsent(false)` does nothing and touches no storage.
+`setConsent(true)` replaces the notice with the normal chat: the saved conversation comes back and the session starts. A chat the visitor has closed stays closed. It works before or after `init()`, and with the script tag build also before the chat has loaded. `setConsent(false)` closes the chat and removes what the widget saved in this browser (the conversation, the session token and the welcome bubble's flag), and the notice shows again on the next open. If the visitor never gave consent in this page view, `setConsent(false)` does nothing and touches no storage. While consent is missing, `sendMessage()` resolves without sending, so don't wait on a reply.
 
 The notice's wording is `consentNotice` and `consentButton` in the [locale](/widget/i18n/), and a language that doesn't have them yet shows them in English.
 

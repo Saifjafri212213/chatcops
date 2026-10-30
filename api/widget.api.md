@@ -25,6 +25,7 @@ declare const _default: {
         token?: string;
     } | null): void;
     setContext(data: Record<string, string> | null): void;
+    setConsent(value: boolean): void;
     update(changes: WidgetUpdate): void;
     destroy(): void;
     on<E extends WidgetEventType>(event: E, handler: WidgetEventHandler<E>): () => void;

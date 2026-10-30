@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLoader, type PanelModule } from '../src/loader/loader.js';
 import { configFromScript } from '../src/script-config.js';
+import ChatCops from '../src/index.js';
 import { Widget, type WidgetConfig } from '../src/widget.js';
 
 const API = 'https://api.test/chat';
@@ -463,5 +464,87 @@ describe('data-wait-for-consent', () => {
     [{}, undefined],
   ])('reads %j as %s', (data, expected) => {
     expect(configFromScript(script(data))?.waitForConsent).toBe(expected);
+  });
+});
+
+describe('ChatCops.setConsent (npm build and single file)', () => {
+  const init = (config: Partial<WidgetConfig> = {}): Widget => {
+    widget = ChatCops.init({ apiUrl: API, waitForConsent: true, ...config });
+    return widget;
+  };
+
+  afterEach(() => {
+    ChatCops.destroy();
+    ChatCops.setConsent(false);
+  });
+
+  it('does nothing without a chat, and does not throw', () => {
+    ChatCops.destroy();
+    expect(() => ChatCops.setConsent(true)).not.toThrow();
+  });
+
+  it('accepts consent after init(), replacing the notice', () => {
+    ChatCops.setConsent(false);
+    const w = init();
+    w.open();
+    expect(noticeOf(w)).not.toBeNull();
+
+    ChatCops.setConsent(true);
+    expect(noticeOf(w)).toBeNull();
+    expect(messagesOf(w).map((m) => m.id)).toEqual(['welcome']);
+  });
+
+  it('accepts consent before init(), so the chat starts without the notice', () => {
+    ChatCops.setConsent(true);
+    const w = init();
+    w.open();
+    expect(noticeOf(w)).toBeNull();
+    expect(messagesOf(w).map((m) => m.id)).toEqual(['welcome']);
+  });
+
+  it('keeps a refusal before init(), and touches no storage while waiting', () => {
+    const calls = spyOnStorage();
+    ChatCops.setConsent(false);
+    const w = init();
+    w.open();
+    expect(noticeOf(w)).not.toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('uses the last call made before init()', () => {
+    ChatCops.setConsent(true);
+    ChatCops.setConsent(false);
+    const w = init();
+    w.open();
+    expect(noticeOf(w)).not.toBeNull();
+  });
+
+  it('keeps the answer through destroy() and a second init()', () => {
+    ChatCops.setConsent(true);
+    init();
+    ChatCops.destroy();
+    const w = init();
+    w.open();
+    expect(noticeOf(w)).toBeNull();
+  });
+
+  it('withdraws consent on a running chat: clears what it saved', () => {
+    ChatCops.setConsent(true);
+    const w = init();
+    w.open();
+    localStorage.setItem(CONVERSATION_KEY, savedConversation);
+    ChatCops.setConsent(false);
+    expect(localStorage.getItem(CONVERSATION_KEY)).toBeNull();
+    w.open();
+    expect(noticeOf(w)).not.toBeNull();
+  });
+
+  it('resolves sendMessage() without sending while consent is missing', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    ChatCops.setConsent(false);
+    init();
+    await expect(ChatCops.sendMessage('hello')).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
