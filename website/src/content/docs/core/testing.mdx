@@ -15,6 +15,8 @@ It exits 0 when every test passed, 1 when some failed, and 2 when it couldn't ru
 
 `chatcops test` reads the `server` section of `chatcops.config.ts`. It's the same config you give the server: the provider, system prompt, tools and knowledge.
 
+The command, its flags and `defineConfig` are `@chatcops/cli`'s API. The package exports more (the runner, the assertion and reporter registries) for its own use, and those can change in a minor release until the CLI reaches 1.0.
+
 ```ts
 import { LeadCaptureTool } from '@chatcops/core';
 import { defineConfig } from '@chatcops/cli';
@@ -60,7 +62,14 @@ tests:
           - contains: "$190"
 ```
 
-Each assertion has one key. `contains` takes a string or a list of strings that must all appear in the reply, `judge` has a model grade the reply ([below](#judged-by-a-model)), and every assertion also works with a `not-` prefix to say the opposite. An assertion name that doesn't exist fails the whole run before anything is sent, so a typo can't make a test pass by checking nothing.
+Each assertion has one key. `judge` has a model grade the reply ([below](#judged-by-a-model)), and every assertion also works with a `not-` prefix to say the opposite. An assertion name that doesn't exist fails the whole run before anything is sent, so a typo can't make a test pass by checking nothing.
+
+Four assertions check what the reply says:
+
+- `contains`: takes a string or a list of strings that must all appear in the reply (`contains: "$19"` or `contains: [Team, "$19"]`).
+- `icontains`: case-insensitive substring matching; takes a string or a list of strings (`icontains: team` or `icontains: [team, "$19"]`).
+- `regex`: matches the reply against a JavaScript `RegExp`. Accepts a pattern string (`regex: "\\$\\d+"`) or `{ pattern, flags }` (`regex: { pattern: "team", flags: "i" }`).
+- `equals`: compares the trimmed reply with the exact expected string (`equals: "The Team plan is $19."`).
 
 Three assertions catch a prompt change that makes replies longer, slower or more expensive:
 
