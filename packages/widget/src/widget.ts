@@ -195,6 +195,8 @@ export class Widget {
   /** Visitor details came from setUser(), so they're sent without a pre-chat form. */
   private userFromSite = false;
   private abortController?: AbortController;
+  /** The visitor pressed Stop, so the abort that follows is not an error. */
+  private stopped = false;
   private retryRequests = new Map<string, SendRequestOptions>();
   private eventHandlers = new Map<WidgetEventType, Set<AnyHandler>>();
   private containerEl?: HTMLElement;
@@ -282,6 +284,7 @@ export class Widget {
         ...this.actionLabels(),
       },
       onSend: (text) => this.handleSend(text),
+      onStop: () => this.stopReply(),
       onClose: () => this.close(),
     });
 
@@ -484,7 +487,7 @@ export class Widget {
     this.preChatFormEl?.destroy();
     this.preChatFormEl = undefined;
     this.panel.messages.clear();
-    this.panel.input.setDisabled(false);
+    this.panel.input.setStreaming(false);
     if (!show) return;
     if (this.config.preChatForm?.enabled && !this.preChatDone) this.showPreChatForm();
     else this.showChatView();
@@ -570,6 +573,7 @@ export class Widget {
       footerText: l.poweredBy,
       closeLabel: l.closeButton,
       sendLabel: l.sendButton,
+      stopLabel: l.stopButton,
     };
   }
 
@@ -753,6 +757,12 @@ export class Widget {
     await this.sendToServer(text, { userMessageId: userMsg.id });
   }
 
+  /** Ends the reply that's streaming. What has streamed stays, as a finished reply. */
+  private stopReply(): void {
+    this.stopped = true;
+    this.abortController?.abort();
+  }
+
   private async handleRetry(errorMessageId: string): Promise<void> {
     if (this.isStreaming) return;
 
@@ -815,7 +825,8 @@ export class Widget {
     const generation = this.generation;
 
     this.isStreaming = true;
-    this.panel.input.setDisabled(true);
+    this.stopped = false;
+    this.panel.input.setStreaming(true);
     this.panel.messages.clearRegenerateButtons();
     this.panel.messages.beginReply();
     this.panel.messages.showTyping();
@@ -842,6 +853,7 @@ export class Widget {
       )) {
         if (this.isStale(generation)) break;
         if (chunk.error) {
+          if (this.stopped) break;
           const errorType = this.resolveErrorType(chunk.error);
           this.markFailed(assistantMsg, this.getErrorMessage(errorType, chunk.retryAfterMs));
           assistantMsg.errorType = errorType;
@@ -956,7 +968,7 @@ export class Widget {
       if (!this.isStale(generation)) {
         this.panel.messages.finishReply(assistantMsg);
         this.isStreaming = false;
-        this.panel.input.setDisabled(false);
+        this.panel.input.setStreaming(false);
         this.panel.input.focus();
         this.saveHistory();
       }

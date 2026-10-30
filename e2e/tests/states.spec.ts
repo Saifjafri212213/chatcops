@@ -139,6 +139,36 @@ for (const look of looks) {
       await expectAccessible(page);
     });
 
+    test('S18 a reply the visitor stopped', async ({ page }) => {
+      await start(page, look);
+      await page.evaluate(() => {
+        const w = window as unknown as { __aborts: number };
+        const realFetch = window.fetch;
+        w.__aborts = 0;
+        window.fetch = (input, init) => {
+          init?.signal?.addEventListener('abort', () => w.__aborts++);
+          return realFetch(input, init);
+        };
+      });
+      await openChat(page);
+      await ask(page, 'Please keep it still streaming');
+      const reply = page.locator('.cc-message-assistant').last();
+      await expect(reply).toContainText('Hello from the');
+      await expect(page.locator(send)).toHaveAccessibleName('Stop');
+      await expectAccessible(page);
+
+      await page.locator(send).click();
+      // The browser's request was aborted, which is what lets the server stop the model.
+      await expect.poll(() => page.evaluate(() => (window as unknown as { __aborts: number }).__aborts)).toBe(1);
+
+      await expect(reply).toContainText('Hello from the');
+      await expect(page.locator('.cc-message-error-note')).toHaveCount(0);
+      await expect(page.locator('.cc-message-regenerate')).toBeVisible();
+      await expect(page.locator(send)).toHaveAccessibleName('Send');
+      await expect(page.locator(input)).toBeEnabled();
+      await expectAccessible(page);
+    });
+
     test('S7 reply with sources', async ({ page }) => {
       await start(page, look);
       await openChat(page);
