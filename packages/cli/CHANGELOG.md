@@ -1,6 +1,6 @@
 # @chatcops/cli
 
-## 1.0.0-rc.0
+## 0.2.0-rc.0
 
 ### Minor Changes
 
@@ -14,7 +14,7 @@
 - Updated dependencies [e28116a]
   - @chatcops/server@1.0.0-rc.0
   - @chatcops/core@1.0.0-rc.0
-  - @chatcops/ingest@1.0.0-rc.0
+  - @chatcops/ingest@0.2.0-rc.0
 
 ## 0.1.0
 
