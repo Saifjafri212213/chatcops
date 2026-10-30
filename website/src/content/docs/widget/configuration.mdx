@@ -175,6 +175,31 @@ The pre-chat form's answers are saved with the conversation, so they expire with
 
 `persistHistory` was removed in 1.0. A config that still sets it throws, so a site that asked for nothing to be saved never starts saving conversations. Use `persistence: 'none'` instead.
 
+### Waiting for cookie consent
+
+A site under a strict consent policy can hold the chat back until the visitor accepts functional cookies. Set `waitForConsent` (or `data-wait-for-consent` on the script tag) and the launcher shows as usual, but opening the chat shows a notice instead of the conversation: "Chat is available once you accept functional cookies." While it waits, the widget reads and writes no `localStorage` or `sessionStorage`, not even to check, and it makes no request to your chat server. The welcome bubble stays hidden too, since it remembers that it was shown.
+
+```typescript
+declare const consentBanner: { open(): void };
+
+ChatCops.init({
+  apiUrl: '/api/chat',
+  waitForConsent: true,
+  // The notice's button. Open your own consent banner here. Without it, the notice has no button.
+  onConsentRequest: () => consentBanner.open(),
+});
+
+// When the visitor accepts functional cookies:
+ChatCops.setConsent(true);
+
+// If they withdraw it later:
+ChatCops.setConsent(false);
+```
+
+`setConsent(true)` replaces the notice with the normal chat: the saved conversation comes back and the session starts. A chat the visitor has closed stays closed. It works before or after `init()`, and with the script tag build also before the chat has loaded. `setConsent(false)` closes the chat and removes what the widget saved in this browser (the conversation, the session token and the welcome bubble's flag), and the notice shows again on the next open. If the visitor never gave consent in this page view, `setConsent(false)` does nothing and touches no storage. While consent is missing, `sendMessage()` resolves without sending, so don't wait on a reply.
+
+The notice's wording is `consentNotice` and `consentButton` in the [locale](/widget/i18n/), and a language that doesn't have them yet shows them in English.
+
 ### AI disclosure
 
 A new conversation starts with a short note: "You're chatting with an AI assistant. It can make mistakes." The EU AI Act (Article 50) asks that people know when they're talking to an AI, and the note stays at the top of the chat, also after "New conversation". Its strings are `disclosure` and `disclosureLearnMore` in the locale, and a language that doesn't have them yet shows them in English.
@@ -265,6 +290,8 @@ interface WidgetConfig {
   placeholder?: string;       // Input placeholder text
   persistence?: 'local' | 'session' | 'none'; // Where the chat is saved, default: 'local'
   historyTtlDays?: number;    // Drop saved chats older than this, default: 30
+  waitForConsent?: boolean;   // Show a notice and use no storage or API until setConsent(true), default: false
+  onConsentRequest?: () => void; // The notice's button; leave it out to have no button
   maxMessages?: number;       // Max messages to persist, default: 50
   pageContext?: boolean;       // Send page URL/title, default: true
   autoOpen?: boolean | number; // Popup mode only. true = immediate, number = delay in ms
@@ -328,6 +355,7 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | `data-dir` | `dir` | Text direction: `'ltr'`, `'rtl'` or `'auto'` |
 | `data-persistence` | `persistence` | `'local'`, `'session'` or `'none'` |
 | `data-history-ttl-days` | `historyTtlDays` | Days a saved conversation is kept |
+| `data-wait-for-consent` | `waitForConsent` | Wait for `ChatCops.setConsent(true)` before using storage or the API. `"false"` turns it off |
 | `data-turnstile-site-key` | `turnstileSiteKey` | Cloudflare Turnstile site key, when the server checks Turnstile |
 | `data-user-token` | `userToken` | Signed token for a signed-in visitor, when the server has `identity` set |
 

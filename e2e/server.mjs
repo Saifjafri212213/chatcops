@@ -27,6 +27,7 @@ const files = {
   '/full.html': ['fixtures/full.html', 'text/html'],
   '/theme.html': ['fixtures/theme.html', 'text/html'],
   '/prechat.html': ['fixtures/prechat.html', 'text/html'],
+  '/consent.html': ['fixtures/consent.html', 'text/html'],
   '/locale.html': ['fixtures/locale.html', 'text/html'],
   '/csp.html': ['fixtures/csp.html', 'text/html'],
   '/locales/zz.js': ['fixtures/locales/zz.js', 'text/javascript'],

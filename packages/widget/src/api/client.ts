@@ -49,11 +49,18 @@ export class ChatClient {
    * The signed-in visitor's identity token for the next session, or none.
    * The session token from before is dropped, so the next message gets one
    * for the new identity (the server starts a new conversation for a
-   * different user).
+   * different user). `forget: false` leaves the stored token alone, for a widget that
+   * may not use storage yet.
    */
-  setUserToken(token: string | undefined): void {
+  setUserToken(token: string | undefined, forget = true): void {
     if (token === this.userToken) return;
     this.userToken = token;
+    if (forget) this.forgetSession();
+    else this.saved = {};
+  }
+
+  /** Drops the session token, in memory and from the store. */
+  forgetSession(): void {
     this.saved = {};
     this.store.remove(this.sessionKey);
   }
