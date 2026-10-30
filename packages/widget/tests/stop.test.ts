@@ -94,9 +94,10 @@ describe('the Stop button', () => {
     await sent;
 
     expect(stream.signal.aborted).toBe(true);
-    const reply = internals(widget).messages.at(-1)!;
+    const reply = internals(widget).messages.at(-1);
+    expect(reply).toBeDefined();
     expect(reply).toMatchObject({ role: 'assistant', content: 'The first half', status: 'complete' });
-    expect(reply.errorType).toBeUndefined();
+    expect(reply?.errorType).toBeUndefined();
     expect(onError).not.toHaveBeenCalled();
     expect(onMessage).toHaveBeenLastCalledWith(expect.objectContaining({ content: 'The first half', status: 'complete' }));
     const shadow = internals(widget).shadow;
