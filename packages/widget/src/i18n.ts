@@ -2,6 +2,7 @@ export interface WidgetLocaleStrings {
   welcomeMessage: string;
   inputPlaceholder: string;
   sendButton: string;
+  stopButton: string;
   closeButton: string;
   openChat: string;
   defaultName: string;
@@ -42,6 +43,7 @@ const en: WidgetLocaleStrings = {
   welcomeMessage: 'How can I help you today?',
   inputPlaceholder: 'Type a message...',
   sendButton: 'Send',
+  stopButton: 'Stop',
   closeButton: 'Close',
   openChat: 'Open chat',
   defaultName: 'AI Assistant',

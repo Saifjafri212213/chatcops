@@ -231,6 +231,10 @@ A request that never responds, or a stream that stops sending data, fails with a
 timeout error. Use a larger value for backends with longer silent periods. This
 option is available through programmatic configuration.
 
+### Stopping a reply
+
+While a reply streams, the send button becomes a Stop button, named by the `stopButton` string (`Stop` in English; a language without it shows the English one). Clicking it ends the request, so the server stops generating, and keeps the text that has streamed as a finished reply: no error, and the visitor can use Regenerate to ask again. The `message` event fires for it with `status: 'complete'`. If the visitor stops before any text has arrived, no reply appears. The text box stays locked while a reply streams, so Escape does not stop it and still closes the popup.
+
 ## WidgetConfig Interface
 
 `WidgetConfig` and the types it's made of are all exported from `@chatcops/widget`, so a site can type its own pieces of a config:

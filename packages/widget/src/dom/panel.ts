@@ -19,13 +19,15 @@ export interface PanelOptions {
   footerText: string;
   closeLabel: string;
   sendLabel: string;
+  stopLabel: string;
   messageActions?: MessageActions;
   onSend: (text: string) => void;
+  onStop: () => void;
   onClose: () => void;
 }
 
 /** The parts of the panel that `update()` can change. */
-export type PanelLabels = Pick<PanelOptions, 'branding' | 'placeholder' | 'footerText' | 'closeLabel' | 'sendLabel'>;
+export type PanelLabels = Pick<PanelOptions, 'branding' | 'placeholder' | 'footerText' | 'closeLabel' | 'sendLabel' | 'stopLabel'>;
 
 export class Panel {
   private el: HTMLDivElement;
@@ -102,7 +104,9 @@ export class Panel {
     this.input = new Input(this.el, {
       placeholder: options.placeholder,
       sendLabel: options.sendLabel,
+      stopLabel: options.stopLabel,
       onSend: options.onSend,
+      onStop: options.onStop,
     });
 
     // Footer
@@ -120,7 +124,7 @@ export class Panel {
     // Messages reads its labels from this same object as it renders.
     if (this.options.messageActions) Object.assign(this.options.messageActions, actionLabels);
     this.renderHeader();
-    this.input.setLabels(labels.placeholder, labels.sendLabel);
+    this.input.setLabels(labels.placeholder, labels.sendLabel, labels.stopLabel);
     this.footer.innerHTML = labels.footerText;
   }
 
