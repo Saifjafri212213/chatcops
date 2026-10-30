@@ -235,6 +235,11 @@
   color: var(--cc-text-secondary);
 }
 
+.cc-message-waiting {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
 .cc-message-sources {
   margin-block-start: 8px;
   font-size: 12px;

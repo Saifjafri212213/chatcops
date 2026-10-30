@@ -197,6 +197,8 @@ export class Widget {
   private abortController?: AbortController;
   /** The visitor pressed Stop, so the abort that follows is not an error. */
   private stopped = false;
+  /** Messages sent while offline, for this page view only: never saved. Sent when the connection is back. */
+  private waiting: MessageData[] = [];
   private retryRequests = new Map<string, SendRequestOptions>();
   private eventHandlers = new Map<WidgetEventType, Set<AnyHandler>>();
   private containerEl?: HTMLElement;
@@ -251,6 +253,7 @@ export class Widget {
       this.shadow = createShadowRoot(undefined, { dir: this.config.dir, locale: this.config.locale, nonce: this.config.nonce });
     }
     this.mounted = true;
+    window.addEventListener('online', this.sendWaiting);
 
     if (this.config.theme) {
       applyTheme(this.shadow, this.config.theme);
@@ -475,6 +478,7 @@ export class Widget {
     this.abortController = undefined;
     this.isStreaming = false;
     this.retryRequests.clear();
+    this.waiting = [];
     this.messages = [];
     this.conversationId = crypto.randomUUID();
     // Nothing old to restore into the new conversation.
@@ -606,6 +610,7 @@ export class Widget {
     if (this.autoOpenTimer !== undefined) clearTimeout(this.autoOpenTimer);
     this.abortController?.abort();
     this.abortController = undefined;
+    window.removeEventListener('online', this.sendWaiting);
     this.restoreScroll();
     this.preChatFormEl?.destroy();
     this.bubble?.destroy();
@@ -749,13 +754,31 @@ export class Widget {
       role: 'user',
       content: text,
     };
-    this.messages.push(userMsg);
     this.panel.addMessage(userMsg);
+    if (!navigator.onLine) {
+      this.waiting.push(userMsg);
+      this.panel.messages.setWaiting(userMsg.id, this.locale.messageWaiting);
+      return;
+    }
+    await this.deliver(userMsg);
+  }
+
+  private async deliver(userMsg: MessageData): Promise<void> {
+    this.messages.push(userMsg);
     this.config.onMessage?.(userMsg);
     this.emit('message', userMsg);
-
-    await this.sendToServer(text, { userMessageId: userMsg.id });
+    await this.sendToServer(userMsg.content, { userMessageId: userMsg.id });
   }
+
+  /** The connection is back: sends what waited, in order, one at a time. */
+  private sendWaiting = async (): Promise<void> => {
+    if (this.isStreaming) return;
+    while (this.waiting.length && navigator.onLine && !this.destroyed) {
+      const next = this.waiting.shift() as MessageData;
+      this.panel.messages.setWaiting(next.id);
+      await this.deliver(next);
+    }
+  };
 
   /** Ends the reply that's streaming. What has streamed stays, as a finished reply. */
   private stopReply(): void {
