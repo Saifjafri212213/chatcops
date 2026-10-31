@@ -38,6 +38,9 @@ export interface WidgetLocaleStrings {
   disclosureLearnMore: string;
   consentNotice: string;
   consentButton: string;
+  moreButton: string;
+  downloadTranscript: string;
+  privacy: string;
 }
 
 const en: WidgetLocaleStrings = {
@@ -79,6 +82,9 @@ const en: WidgetLocaleStrings = {
   disclosureLearnMore: 'Learn more',
   consentNotice: 'Chat is available once you accept functional cookies.',
   consentButton: 'Cookie settings',
+  moreButton: 'More options',
+  downloadTranscript: 'Download transcript',
+  privacy: 'Privacy',
 };
 
 const locales: Record<string, WidgetLocaleStrings> = { en };

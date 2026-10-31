@@ -101,6 +101,7 @@ ChatCops.init({
   pageContext: true,                     // send page URL/title to API
   autoOpen: 5000,                       // auto-open after ms (popup only)
   locale: 'en',
+  privacyUrl: 'https://example.com/privacy', // link in header menu (https: or http:)
 
   // Callbacks
   onOpen: () => {},
@@ -146,7 +147,8 @@ All configuration can be set via `data-*` attributes:
   data-welcome-bubble-delay="3000"
   data-placeholder="Type here..."
   data-locale="en"
-  data-auto-open="true">
+  data-auto-open="true"
+  data-privacy-url="https://example.com/privacy">
 </script>
 ```
 

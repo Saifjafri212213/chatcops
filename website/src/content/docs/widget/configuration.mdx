@@ -46,6 +46,7 @@ ChatCops supports two display modes:
   data-placeholder="Type a message..."
   data-locale="en"
   data-auto-open="1000"
+  data-privacy-url="https://example.com/privacy"
 ></script>
 ```
 
@@ -218,6 +219,19 @@ ChatCops.init({
 
 `disclosure: false` (or `data-disclosure="false"`) removes it. The widget then logs a note in the console, because telling visitors some other way is up to you.
 
+### Privacy policy link
+
+Add `privacyUrl` (or `data-privacy-url` on the script tag) to show a "Privacy" link in the header's "More options" menu (`⋯`), opening your site's privacy policy in a new tab:
+
+```typescript
+ChatCops.init({
+  apiUrl: '/api/chat',
+  privacyUrl: 'https://example.com/privacy',
+});
+```
+
+Only `https:` and `http:` URLs are accepted. Invalid or unsafe URLs (such as `javascript:`) are omitted.
+
 ### Streaming inactivity timeout
 
 Set `timeout` in `ChatCops.init()` to change the inactivity timeout in milliseconds.
@@ -308,6 +322,7 @@ interface WidgetConfig {
   locale?: string;            // Sent to the server with each message. Only English strings are built in
   dir?: 'ltr' | 'rtl' | 'auto'; // Text direction; defaults from locale, then document direction
   strings?: Partial<WidgetLocaleStrings>; // Custom i18n overrides
+  privacyUrl?: string;        // Link in header menu to your site's privacy policy (https: or http: only)
   preChatForm?: {
     enabled: boolean;
     title?: string;
@@ -366,6 +381,7 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | `data-persistence` | `persistence` | `'local'`, `'session'` or `'none'` |
 | `data-history-ttl-days` | `historyTtlDays` | Days a saved conversation is kept |
 | `data-wait-for-consent` | `waitForConsent` | Wait for `ChatCops.setConsent(true)` before using storage or the API. `"false"` turns it off |
+| `data-privacy-url` | `privacyUrl` | Privacy policy link in header menu (https: or http: only) |
 | `data-turnstile-site-key` | `turnstileSiteKey` | Cloudflare Turnstile site key, when the server checks Turnstile |
 | `data-user-token` | `userToken` | Signed token for a signed-in visitor, when the server has `identity` set |
 

@@ -254,6 +254,31 @@ for (const look of looks) {
       await expectAccessible(page);
     });
 
+    test('header menu with keyboard navigation and New conversation', async ({ page }) => {
+      await start(page, look, { privacyUrl: 'https://example.com/privacy' });
+      await openChat(page);
+      await ask(page, 'First message');
+      await expect(page.locator('.cc-message-assistant').last()).toContainText('Hello from the test server.');
+      await expect(page.locator('.cc-message-user')).toHaveCount(1);
+
+      const moreBtn = page.locator('.cc-header-more');
+      await moreBtn.focus();
+      await expect(moreBtn).toBeFocused();
+      await page.keyboard.press('ArrowDown');
+
+      const menu = page.locator('.cc-header-menu');
+      await expect(menu).toBeVisible();
+      await expect(moreBtn).toHaveAttribute('aria-expanded', 'true');
+
+      await expectAccessible(page);
+
+      await page.keyboard.press('Enter');
+      await expect(menu).not.toBeVisible();
+      await expect(moreBtn).toHaveAttribute('aria-expanded', 'false');
+
+      await expect(page.locator('.cc-message-user')).toHaveCount(0);
+    });
+
     test.describe('S14 on a phone', () => {
       test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
