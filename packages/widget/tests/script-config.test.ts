@@ -63,10 +63,52 @@ describe('configFromScript', () => {
     });
   });
 
+  it.each([
+    ['mode', 'popup'],
+    ['mode', 'inline'],
+    ['themeMode', 'light'],
+    ['themeMode', 'dark'],
+    ['themeMode', 'auto'],
+    ['position', 'bottom-right'],
+    ['position', 'bottom-left'],
+  ])('accepts documented %s value %s', (attribute, value) => {
+    const config = configFromScript(script({ apiUrl: '/api/chat', [attribute]: value }));
+
+    if (attribute === 'mode') expect(config?.mode).toBe(value);
+    if (attribute === 'themeMode') expect(config?.theme?.mode).toBe(value);
+    if (attribute === 'position') expect(config?.theme?.position).toBe(value);
+  });
+
+  it.each([
+    ['mode', 'modal'],
+    ['themeMode', 'system'],
+    ['position', 'center'],
+  ])('ignores invalid %s value %s and leaves the documented default unset', (attribute, value) => {
+    const config = configFromScript(script({ apiUrl: '/api/chat', [attribute]: value }));
+
+    if (attribute === 'mode') expect(config?.mode).toBeUndefined();
+    if (attribute === 'themeMode') expect(config?.theme?.mode).toBeUndefined();
+    if (attribute === 'position') expect(config?.theme?.position).toBeUndefined();
+  });
+
   it('ignores a persistence mode or history length it does not know', () => {
     const config = configFromScript(script({ apiUrl: '/api/chat', persistence: 'cookie', historyTtlDays: 'forever' }));
     expect(config?.persistence).toBeUndefined();
     expect(config?.historyTtlDays).toBeUndefined();
+  });
+
+  it.each([
+    ['true', true],
+    ['false', false],
+    ['0', 0],
+    ['2000', 2000],
+    ['2147483647', 2_147_483_647],
+    ['2147483648', undefined],
+    ['999999999999999999999999999999', undefined],
+    ['1.5', undefined],
+    ['', true],
+  ])('parses data-auto-open="%s" as %s', (autoOpen, expected) => {
+    expect(configFromScript(script({ apiUrl: '/api/chat', autoOpen }))?.autoOpen).toBe(expected);
   });
 
   it.each([

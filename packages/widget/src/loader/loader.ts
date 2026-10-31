@@ -5,6 +5,7 @@ import { applyTheme } from '../theme.js';
 import type { WidgetLocaleStrings } from '../i18n.js';
 import type { Widget, WidgetConfig, WidgetEventHandler, WidgetEventType, WidgetUpdate } from '../widget.js';
 import type { UserToken } from '../api/client.js';
+import { timerDelay } from '../timer-delay.js';
 import { VERSION } from '../version.js';
 
 export interface PanelModule {
@@ -230,13 +231,12 @@ export function createLoader(
         return;
       }
       showLauncher(current);
-      if (current.autoOpen !== undefined && current.autoOpen !== false) {
-        timers.push(setTimeout(() => api.open(), current.autoOpen === true ? 0 : current.autoOpen));
-      }
+      const autoOpen = current.autoOpen === true ? 0 : timerDelay(current.autoOpen);
+      if (autoOpen !== undefined) timers.push(setTimeout(() => api.open(), autoOpen));
       if (current.welcomeBubble) {
         // The chat loads when the bubble is due, and shows it right away.
         const bubble = current.welcomeBubble;
-        timers.push(setTimeout(() => void mount({ welcomeBubble: { ...bubble, delay: 0 } }), bubble.delay ?? DEFAULT_BUBBLE_DELAY));
+        timers.push(setTimeout(() => void mount({ welcomeBubble: { ...bubble, delay: 0 } }), timerDelay(bubble.delay) ?? DEFAULT_BUBBLE_DELAY));
       }
     },
 

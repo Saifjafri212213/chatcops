@@ -126,7 +126,7 @@ ChatCops.init({
 });
 ```
 
-The `container` option accepts a CSS selector string or a direct `HTMLElement` reference.
+The `container` option accepts a valid CSS selector string or a direct `HTMLElement` reference. An invalid selector throws a `ChatCops: invalid container selector` error; a valid selector that matches no element throws a `ChatCops: container element not found` error.
 
 ### More than one widget on a page
 
@@ -178,7 +178,7 @@ The pre-chat form's answers are saved with the conversation, so they expire with
 
 ### Waiting for cookie consent
 
-A site under a strict consent policy can hold the chat back until the visitor accepts functional cookies. Set `waitForConsent` (or `data-wait-for-consent` on the script tag) and the launcher shows as usual, but opening the chat shows a notice instead of the conversation: "Chat is available once you accept functional cookies." While it waits, the widget reads and writes no `localStorage` or `sessionStorage`, not even to check, and it makes no request to your chat server. The welcome bubble stays hidden too, since it remembers that it was shown.
+A site under a strict consent policy can hold the chat back until the visitor accepts functional cookies. Set `waitForConsent` (or `data-wait-for-consent="true"` on the script tag) and the launcher shows as usual, but opening the chat shows a notice instead of the conversation: "Chat is available once you accept functional cookies." While it waits, the widget reads and writes no `localStorage` or `sessionStorage`, not even to check, and it makes no request to your chat server. The welcome bubble stays hidden too, since it remembers that it was shown.
 
 ```typescript
 declare const consentBanner: { open(): void };
@@ -308,7 +308,7 @@ interface WidgetConfig {
   suggestions?: string[];     // Suggested question buttons shown in a new conversation
   welcomeBubble?: {           // Popup mode only
     text: string;             // Text shown on hover bubble
-    delay?: number;           // ms before bubble appears
+    delay?: number;           // ms before bubble appears, 0 to 2147483647 (about 24.8 days), default: 3000. A larger number waits that long; NaN, a negative or a non-number uses the default
     showOnce?: boolean;       // Show only once (default: true): per browser with 'local' persistence, per tab with 'session', every page load with 'none'
   };
   placeholder?: string;       // Input placeholder text
@@ -318,7 +318,7 @@ interface WidgetConfig {
   onConsentRequest?: () => void; // The notice's button; leave it out to have no button
   maxMessages?: number;       // Max messages to persist, default: 50
   pageContext?: boolean;       // Send page URL/title, default: true
-  autoOpen?: boolean | number; // Popup mode only. true = immediate, number = delay in ms
+  autoOpen?: boolean | number; // Popup mode only. true = immediate, number = delay in ms, 0 to 2147483647 (about 24.8 days). A larger number waits that long; NaN, a negative or a non-number doesn't auto-open
   locale?: string;            // Sent to the server with each message. Only English strings are built in
   dir?: 'ltr' | 'rtl' | 'auto'; // Text direction; defaults from locale, then document direction
   strings?: Partial<WidgetLocaleStrings>; // Custom i18n overrides
@@ -355,16 +355,16 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | Attribute | Config Key | Description |
 |-----------|-----------|-------------|
 | `data-api-url` | `apiUrl` | API endpoint URL (required) |
-| `data-mode` | `mode` | `'popup'` or `'inline'` |
+| `data-mode` | `mode` | `'popup'` or `'inline'` (default: `'popup'`; invalid values are ignored) |
 | `data-container` | `container` | CSS selector for inline container |
-| `data-theme-mode` | `theme.mode` | `'light'`, `'dark'` or `'auto'` |
+| `data-theme-mode` | `theme.mode` | `'light'`, `'dark'` or `'auto'` (default: `'auto'`; invalid values are ignored) |
 | `data-accent` | `theme.accent` | Primary accent color |
 | `data-accent-dark` | `theme.accentDark` | Accent color in dark mode |
 | `data-text-color` | `theme.textColor` | Primary text color |
 | `data-bg-color` | `theme.bgColor` | Background color |
 | `data-font-family` | `theme.fontFamily` | Font family |
 | `data-border-radius` | `theme.borderRadius` | Border radius. A bare number is px (`12`), or use any CSS length (`1rem`) |
-| `data-position` | `theme.position` | `'bottom-right'` or `'bottom-left'` |
+| `data-position` | `theme.position` | `'bottom-right'` or `'bottom-left'` (default: `'bottom-right'`; invalid values are ignored) |
 | `data-brand-name` | `branding.name` | Header title |
 | `data-brand-avatar` | `branding.avatar` | Avatar image URL |
 | `data-brand-subtitle` | `branding.subtitle` | Subtitle text |
@@ -373,14 +373,14 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | `data-disclosure-text` | `disclosure.text` | Wording of the AI disclosure |
 | `data-disclosure-url` | `disclosure.learnMoreUrl` | "Learn more" link in the AI disclosure |
 | `data-welcome-bubble` | `welcomeBubble.text` | Welcome bubble text |
-| `data-welcome-bubble-delay` | `welcomeBubble.delay` | Bubble delay in ms |
+| `data-welcome-bubble-delay` | `welcomeBubble.delay` | Bubble delay in ms (0–2147483647) |
 | `data-placeholder` | `placeholder` | Input placeholder |
-| `data-auto-open` | `autoOpen` | Auto-open delay in ms or `true` |
+| `data-auto-open` | `autoOpen` | Auto-open delay in ms (0–2147483647) or `true`; invalid values are ignored |
 | `data-locale` | `locale` | Language code |
 | `data-dir` | `dir` | Text direction: `'ltr'`, `'rtl'` or `'auto'` |
 | `data-persistence` | `persistence` | `'local'`, `'session'` or `'none'` |
 | `data-history-ttl-days` | `historyTtlDays` | Days a saved conversation is kept |
-| `data-wait-for-consent` | `waitForConsent` | Wait for `ChatCops.setConsent(true)` before using storage or the API. `"false"` turns it off |
+| `data-wait-for-consent` | `waitForConsent` | When present, anything except `"false"` waits for consent. Invalid non-empty values log a warning; `"true"` or an empty value enables it without a warning |
 | `data-privacy-url` | `privacyUrl` | Privacy policy link in header menu (https: or http: only) |
 | `data-turnstile-site-key` | `turnstileSiteKey` | Cloudflare Turnstile site key, when the server checks Turnstile |
 | `data-user-token` | `userToken` | Signed token for a signed-in visitor, when the server has `identity` set |

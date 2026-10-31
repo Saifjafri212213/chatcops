@@ -15,6 +15,7 @@ type WidgetInternals = {
     status?: 'streaming' | 'complete' | 'error';
     errorType?: 'rate_limit' | 'network' | 'provider_error' | 'timeout';
   }>;
+  saveHistory(): void;
   isStreaming: boolean;
   userData?: Record<string, string>;
   showChatView(): void;
@@ -83,10 +84,107 @@ describe('Widget', () => {
     widget.destroy();
   });
 
+  it('reports malformed inline container selectors with a ChatCops error', () => {
+    const widget = new Widget({
+      apiUrl: 'https://api.test/chat',
+      mode: 'inline',
+      container: '[',
+      siteId: 'invalid-container-selector',
+    });
+
+    expect(() => widget.init()).toThrowError('ChatCops: invalid container selector: [');
+  });
+
+  it('keeps the existing error when an inline container selector has no match', () => {
+    const widget = new Widget({
+      apiUrl: 'https://api.test/chat',
+      mode: 'inline',
+      container: '#missing-container',
+      siteId: 'missing-container-selector',
+    });
+
+    expect(() => widget.init()).toThrowError('ChatCops: container element not found: #missing-container');
+  });
+
+  it('resolves a valid inline container selector', () => {
+    const container = document.createElement('div');
+    container.id = 'inline-container';
+    document.body.appendChild(container);
+    const widget = new Widget({ apiUrl: 'https://api.test/chat', mode: 'inline', container: '#inline-container' });
+
+    widget.init();
+
+    expect(container.querySelector('.chatcops-root')).not.toBeNull();
+    widget.destroy();
+  });
+
   afterEach(() => {
     document.documentElement.removeAttribute('style');
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  describe('maxMessages', () => {
+    const makeMessages = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `message-${index}`,
+        role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+        content: `Message ${index}`,
+      }));
+
+    it('defaults to saving the latest 50 transcript messages', () => {
+      const widget = new Widget({ apiUrl: '/chat', persistence: 'local' });
+      widget.init();
+      getInternals(widget).messages = makeMessages(55);
+
+      getInternals(widget).saveHistory();
+
+      const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+      expect(saved.messages).toHaveLength(50);
+      expect(saved.messages[0].id).toBe('message-5');
+      widget.destroy();
+    });
+
+    it('saves only the latest messages for a positive safe-integer limit', () => {
+      const widget = new Widget({ apiUrl: '/chat', persistence: 'local', maxMessages: 2 });
+      widget.init();
+      getInternals(widget).messages = makeMessages(5);
+
+      getInternals(widget).saveHistory();
+
+      const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+      expect(saved.messages.map((message: { id: string }) => message.id)).toEqual(['message-3', 'message-4']);
+      widget.destroy();
+    });
+
+    it('saves no transcript messages at zero while keeping in-memory chat messages', () => {
+      const widget = new Widget({ apiUrl: '/chat', persistence: 'local', maxMessages: 0 });
+      widget.init();
+      getInternals(widget).messages = makeMessages(3);
+
+      getInternals(widget).saveHistory();
+
+      const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+      expect(saved.messages).toEqual([]);
+      expect(getInternals(widget).messages).toHaveLength(3);
+      widget.destroy();
+    });
+
+    it.each([-1, -50, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+      'falls back to 50 for invalid maxMessages value %s',
+      (maxMessages) => {
+        const widget = new Widget({ apiUrl: '/chat', persistence: 'local', maxMessages });
+        widget.init();
+        getInternals(widget).messages = makeMessages(55);
+
+        getInternals(widget).saveHistory();
+
+        const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+        expect(saved.messages).toHaveLength(50);
+        expect(saved.messages[0].id).toBe('message-5');
+        widget.destroy();
+      }
+    );
   });
 
   it('moves to the conversation id the server gives with a session token, and saves history under it', async () => {
@@ -121,6 +219,98 @@ describe('Widget', () => {
     widget.destroy();
     vi.advanceTimersByTime(100);
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  describe('auto-open and the bubble delay', () => {
+    const MAX = 2_147_483_647;
+    const DAY = 86_400_000;
+    const start = (config: Record<string, unknown>) => {
+      const onOpen = vi.fn();
+      const widget = new Widget({ apiUrl: 'https://api.test/chat', onOpen, ...config });
+      widget.init();
+      return { widget, onOpen };
+    };
+    const bubbleOf = (widget: Widget) => getInternals(widget).shadow.querySelector('.cc-bubble') as HTMLElement;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('opens at once for true and for 0, and after a valid delay', () => {
+      for (const [autoOpen, at] of [[true, 0], [0, 0], [1000, 1000], [DAY, DAY], [MAX, MAX]] as const) {
+        const { widget, onOpen } = start({ autoOpen });
+        if (at > 0) {
+          vi.advanceTimersByTime(at - 1);
+          expect(onOpen, String(autoOpen)).not.toHaveBeenCalled();
+        }
+        vi.advanceTimersByTime(at === 0 ? 0 : 1);
+        expect(onOpen, String(autoOpen)).toHaveBeenCalledTimes(1);
+        widget.destroy();
+      }
+    });
+
+    it.each([3_000_000_000, Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY])(
+      'does not open at once for an autoOpen delay of %s, which is past what setTimeout holds',
+      (autoOpen) => {
+        const { widget, onOpen } = start({ autoOpen });
+        vi.advanceTimersByTime(0);
+        vi.advanceTimersByTime(DAY);
+        expect(onOpen).not.toHaveBeenCalled();
+        // It waits for the longest delay there is.
+        vi.advanceTimersByTime(MAX - DAY);
+        expect(onOpen).toHaveBeenCalledTimes(1);
+        widget.destroy();
+      },
+    );
+
+    it.each([Number.NaN, -1, -3000, Number.NEGATIVE_INFINITY, '500', null, false])('never auto-opens for autoOpen %j', (autoOpen) => {
+      const { widget, onOpen } = start({ autoOpen });
+      vi.advanceTimersByTime(MAX);
+      expect(onOpen).not.toHaveBeenCalled();
+      widget.destroy();
+    });
+
+    it('shows the bubble after a valid delay, and at once for 0', () => {
+      for (const delay of [0, 1500]) {
+        // The bubble shows once per browser, so each one starts clean.
+        localStorage.clear();
+        const { widget } = start({ welcomeBubble: { text: 'Hi', delay } });
+        if (delay) {
+          vi.advanceTimersByTime(delay - 1);
+          expect(bubbleOf(widget).classList.contains('cc-visible'), String(delay)).toBe(false);
+        }
+        vi.advanceTimersByTime(delay ? 1 : 0);
+        expect(bubbleOf(widget).classList.contains('cc-visible'), String(delay)).toBe(true);
+        widget.destroy();
+      }
+    });
+
+    it.each([Number.NaN, -1, -3000, Number.NEGATIVE_INFINITY, '2000', null])(
+      'uses the default of 3000 ms when the bubble delay is %j',
+      (delay) => {
+        const { widget } = start({ welcomeBubble: { text: 'Hi', delay } });
+        vi.advanceTimersByTime(0);
+        expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(false);
+        vi.advanceTimersByTime(2998);
+        expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(false);
+        vi.advanceTimersByTime(2);
+        expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(true);
+        widget.destroy();
+      },
+    );
+
+    it.each([3_000_000_000, Number.POSITIVE_INFINITY])('does not show the bubble at once for a delay of %s', (delay) => {
+      const { widget } = start({ welcomeBubble: { text: 'Hi', delay } });
+      vi.advanceTimersByTime(0);
+      vi.advanceTimersByTime(DAY);
+      expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(false);
+      vi.advanceTimersByTime(MAX - DAY);
+      expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(true);
+      widget.destroy();
+    });
   });
 
   it.each(['bottom-right', 'bottom-left'] as const)(

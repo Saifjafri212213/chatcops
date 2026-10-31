@@ -227,6 +227,88 @@ describe('the script tag loader', () => {
     loader.destroy();
   });
 
+  describe('a delay that setTimeout cannot hold', () => {
+    const MAX = 2_147_483_647;
+    const DAY = 86_400_000;
+
+    it.each([3_000_000_000, Number.POSITIVE_INFINITY])('does not run autoOpen at once for %s, and waits for the longest delay there is', async (autoOpen) => {
+      vi.useFakeTimers();
+      const { load } = panel();
+      const loader = createLoader(load);
+      const opened = vi.fn();
+      loader.on('open', opened);
+      loader.init({ apiUrl: 'https://api.test/chat', autoOpen });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(DAY);
+      expect(opened).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(MAX - DAY);
+      expect(opened).toHaveBeenCalledTimes(1);
+      loader.destroy();
+    });
+
+    it.each([Number.NaN, -1, -3000, Number.NEGATIVE_INFINITY, '500', null, false])('never runs autoOpen for %j', async (autoOpen) => {
+      vi.useFakeTimers();
+      const { load } = panel();
+      const loader = createLoader(load);
+      const opened = vi.fn();
+      loader.on('open', opened);
+      loader.init({ apiUrl: 'https://api.test/chat', autoOpen: autoOpen as never });
+
+      await vi.advanceTimersByTimeAsync(MAX);
+      expect(opened).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
+      loader.destroy();
+    });
+
+    it('still runs autoOpen at once for true and for 0', async () => {
+      vi.useFakeTimers();
+      for (const autoOpen of [true, 0]) {
+        const { load } = panel();
+        const loader = createLoader(load);
+        const opened = vi.fn();
+        loader.on('open', opened);
+        loader.init({ apiUrl: 'https://api.test/chat', autoOpen });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(opened, String(autoOpen)).toHaveBeenCalledTimes(1);
+        loader.destroy();
+      }
+    });
+
+    it.each([Number.NaN, -1, -3000, Number.NEGATIVE_INFINITY, '2000', null])(
+      'loads the chat for the bubble after the default 3000 ms when its delay is %j',
+      async (delay) => {
+        vi.useFakeTimers();
+        const { load } = panel();
+        const loader = createLoader(load);
+        loader.init({ apiUrl: 'https://api.test/chat', welcomeBubble: { text: 'Need help?', delay: delay as never } });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(load).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(2998);
+        expect(load).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(2);
+        expect(load).toHaveBeenCalledTimes(1);
+        loader.destroy();
+      },
+    );
+
+    it.each([3_000_000_000, Number.POSITIVE_INFINITY])('does not load the chat at once for a bubble delay of %s', async (delay) => {
+      vi.useFakeTimers();
+      const { load } = panel();
+      const loader = createLoader(load);
+      loader.init({ apiUrl: 'https://api.test/chat', welcomeBubble: { text: 'Need help?', delay } });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(DAY);
+      expect(load).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(MAX - DAY);
+      expect(load).toHaveBeenCalledTimes(1);
+      loader.destroy();
+    });
+  });
+
   it('loads the chat when the welcome bubble is due, and shows the bubble then', async () => {
     vi.useFakeTimers();
     const { load } = panel();
