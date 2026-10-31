@@ -207,7 +207,10 @@ export async function signWebhook(body: string, secret: string, timestampSec = M
 /**
  * Checks a delivery on the receiving side. Pass the raw request body exactly
  * as received (not re-serialized JSON) and the `X-ChatCops-Signature` header.
- * Returns false for a bad signature or one older than `toleranceSec`.
+ * Returns false for a bad signature or one more than `toleranceSec` seconds
+ * from now, in the past or the future (default 300; 0 allows only the same
+ * second). Throws a RangeError when `toleranceSec` is not a whole number of
+ * seconds, 0 or more.
  */
 export async function verifyWebhook(options: {
   body: string;
@@ -217,6 +220,11 @@ export async function verifyWebhook(options: {
   now?: number;
 }): Promise<boolean> {
   const { body, signature, secret, toleranceSec = DEFAULT_SIGNATURE_TOLERANCE_SEC } = options;
+  // A setting, not input: a wrong one throws instead of returning false, so it can't pass for a bad signature.
+  // NaN and Infinity would make the age check below never reject anything.
+  if (!Number.isSafeInteger(toleranceSec) || toleranceSec < 0) {
+    throw new RangeError(`verifyWebhook: toleranceSec must be a whole number of seconds, 0 or more (got ${String(toleranceSec)})`);
+  }
   if (!signature) return false;
 
   const parts = Object.fromEntries(

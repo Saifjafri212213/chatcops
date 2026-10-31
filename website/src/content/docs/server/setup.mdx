@@ -379,7 +379,7 @@ app.post('/hooks/chatcops', express.text({ type: 'application/json' }), async (r
 });
 ```
 
-`verifyWebhook` also rejects signatures older than 5 minutes (`toleranceSec` changes that).
+`verifyWebhook` also rejects signatures more than 5 minutes (300 seconds) away from now, in the past or the future. `toleranceSec` changes that: it takes a whole number of seconds, `0` or more, where `0` accepts only a signature made in the same second. Any other value (`NaN`, `Infinity`, a negative number, a fraction) throws a `RangeError`, since it would otherwise switch the check off, and a wrong setting should be loud rather than look like a bad signature.
 
 **Allowed URLs.** Webhook URLs must use https, and hosts on loopback, private or link-local networks (`localhost`, `10.x`, `192.168.x`, `169.254.169.254` and so on) are refused when the server starts. For a receiver on your own machine during development, set `allowPrivateNetwork: true` on that webhook:
 
