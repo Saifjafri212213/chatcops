@@ -43,6 +43,8 @@ Ingest options:
   --concurrency <n>     Pages fetched at once (default 4)
   --prune               Remove pages that are gone (never after a discovery error)
   --force               Re-embed every page, even unchanged ones
+  --contextualize       Have the model in ingest.contextualize.provider write a short context for each
+                        chunk before it is embedded (costs model tokens; pages are embedded again)
   --json                One JSON object per line, for CI
 
 Search options:
@@ -130,6 +132,7 @@ function parse(argv: string[]) {
       concurrency: { type: 'string' },
       prune: { type: 'boolean' },
       force: { type: 'boolean' },
+      contextualize: { type: 'boolean' },
       json: { type: 'boolean' },
       'top-k': { type: 'string' },
       filter: { type: 'string' },
@@ -158,9 +161,17 @@ async function runIngest(values: Values, io: Io): Promise<number> {
     const sources = values.source?.length ? values.source.map((source) => toSource(source, values['base-url'], io.cwd)) : loaded.config.ingest?.sources;
     if (!sources?.length) throw new ConfigError('Nothing to ingest: pass --source, or set ingest.sources in the config.');
 
+    // A model only runs with --contextualize, so a run never spends on one by surprise: the config holds which.
+    if (values.contextualize && !loaded.config.ingest?.contextualize) {
+      throw new ConfigError(
+        "--contextualize needs a model: set ingest.contextualize.provider in the config, as a provider config such as { type: 'claude', apiKey: '...' } or a provider object."
+      );
+    }
+
     const json = !!values.json;
     const stats = await ingest({
       ...loaded.config.ingest,
+      contextualize: values.contextualize ? loaded.config.ingest?.contextualize : false,
       sources,
       ...(values.index ? { index: values.index } : {}),
       ...(maxPages !== undefined ? { maxPages } : {}),
@@ -231,6 +242,10 @@ function summary(stats: IngestStats, dryRun: boolean): string {
     `${dryRun ? 'Would index' : 'Indexed'} ${stats.indexed} of ${stats.discovered} pages: ${stats.chunks} chunks, ${stats.embedded} embedded.`,
     `${stats.unchanged} unchanged, ${stats.skipped} skipped, ${stats.failed} failed, ${stats.pruned} ${dryRun ? 'to remove' : 'removed'}.`,
   ];
+  if (stats.contextualized) {
+    const { inputTokens, outputTokens } = stats.modelTokens;
+    lines.push(`Context written for ${stats.contextualized} chunks by the model (${inputTokens} input, ${outputTokens} output tokens).`);
+  }
   if (stats.pruneSkipped) lines.push(`Didn't remove anything: ${stats.pruneSkipped}.`);
   if (stats.errors.length) lines.push(...stats.errors.map((error) => `! ${error}`));
   return `${lines.join('\n')}\n`;
