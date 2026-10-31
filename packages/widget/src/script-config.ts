@@ -13,6 +13,16 @@ export function parseAutoOpen(value?: string): boolean | number | undefined {
   return undefined;
 }
 
+function parseOptionalBoolean(value?: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === '' || value === 'true') return true;
+  if (value === 'false') return false;
+  console.warn(
+    `[chatcops] data-wait-for-consent="${value}" isn't true or false, so the chat waits for consent. Use "true" or "false".`,
+  );
+  return true;
+}
+
 /** The widget config from a script tag's `data-*` attributes, or `undefined` without `data-api-url`. */
 export function configFromScript(script: HTMLScriptElement): WidgetConfig | undefined {
   const apiUrl = script.dataset.apiUrl;
@@ -60,7 +70,7 @@ export function configFromScript(script: HTMLScriptElement): WidgetConfig | unde
     dir: (['ltr', 'rtl', 'auto'] as const).find((dir) => dir === script.dataset.dir),
     persistence: (['local', 'session', 'none'] as const).find((mode) => mode === script.dataset.persistence),
     historyTtlDays: /^\d+$/.test(script.dataset.historyTtlDays ?? '') ? Number(script.dataset.historyTtlDays) : undefined,
-    waitForConsent: script.dataset.waitForConsent === undefined ? undefined : script.dataset.waitForConsent !== 'false',
+    waitForConsent: parseOptionalBoolean(script.dataset.waitForConsent),
     privacyUrl: script.dataset.privacyUrl,
   };
 }
