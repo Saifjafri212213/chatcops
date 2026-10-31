@@ -95,6 +95,7 @@ export interface WidgetConfig {
   persistence?: Persistence;
   /** Saved conversations older than this are dropped. Default 30 days. */
   historyTtlDays?: number;
+  /** Maximum transcript messages to save. A non-negative safe integer; invalid values default to 50. */
   maxMessages?: number;
   pageContext?: boolean;
   autoOpen?: boolean | number;
@@ -1123,8 +1124,14 @@ export class Widget {
   }
 
   private saveHistory(): void {
-    const maxMessages = this.config.maxMessages ?? 50;
-    const toSave = this.messages.filter((m) => m.id !== 'welcome').slice(-maxMessages);
+    const configuredMaxMessages = this.config.maxMessages;
+    const maxMessages = configuredMaxMessages !== undefined &&
+      Number.isSafeInteger(configuredMaxMessages) &&
+      configuredMaxMessages >= 0
+      ? configuredMaxMessages
+      : 50;
+    const transcript = this.messages.filter((m) => m.id !== 'welcome');
+    const toSave = maxMessages === 0 ? [] : transcript.slice(-maxMessages);
 
     this.storage.save({
       id: this.conversationId,

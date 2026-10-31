@@ -15,6 +15,7 @@ type WidgetInternals = {
     status?: 'streaming' | 'complete' | 'error';
     errorType?: 'rate_limit' | 'network' | 'provider_error' | 'timeout';
   }>;
+  saveHistory(): void;
   isStreaming: boolean;
   userData?: Record<string, string>;
   showChatView(): void;
@@ -121,6 +122,69 @@ describe('Widget', () => {
     document.documentElement.removeAttribute('style');
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  describe('maxMessages', () => {
+    const makeMessages = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `message-${index}`,
+        role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+        content: `Message ${index}`,
+      }));
+
+    it('defaults to saving the latest 50 transcript messages', () => {
+      const widget = new Widget({ apiUrl: '/chat', persistence: 'local' });
+      widget.init();
+      getInternals(widget).messages = makeMessages(55);
+
+      getInternals(widget).saveHistory();
+
+      const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+      expect(saved.messages).toHaveLength(50);
+      expect(saved.messages[0].id).toBe('message-5');
+      widget.destroy();
+    });
+
+    it('saves only the latest messages for a positive safe-integer limit', () => {
+      const widget = new Widget({ apiUrl: '/chat', persistence: 'local', maxMessages: 2 });
+      widget.init();
+      getInternals(widget).messages = makeMessages(5);
+
+      getInternals(widget).saveHistory();
+
+      const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+      expect(saved.messages.map((message: { id: string }) => message.id)).toEqual(['message-3', 'message-4']);
+      widget.destroy();
+    });
+
+    it('saves no transcript messages at zero while keeping in-memory chat messages', () => {
+      const widget = new Widget({ apiUrl: '/chat', persistence: 'local', maxMessages: 0 });
+      widget.init();
+      getInternals(widget).messages = makeMessages(3);
+
+      getInternals(widget).saveHistory();
+
+      const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+      expect(saved.messages).toEqual([]);
+      expect(getInternals(widget).messages).toHaveLength(3);
+      widget.destroy();
+    });
+
+    it.each([-1, -50, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+      'falls back to 50 for invalid maxMessages value %s',
+      (maxMessages) => {
+        const widget = new Widget({ apiUrl: '/chat', persistence: 'local', maxMessages });
+        widget.init();
+        getInternals(widget).messages = makeMessages(55);
+
+        getInternals(widget).saveHistory();
+
+        const saved = JSON.parse(localStorage.getItem('chatcops_conversation') ?? '{}');
+        expect(saved.messages).toHaveLength(50);
+        expect(saved.messages[0].id).toBe('message-5');
+        widget.destroy();
+      }
+    );
   });
 
   it('moves to the conversation id the server gives with a session token, and saves history under it', async () => {
