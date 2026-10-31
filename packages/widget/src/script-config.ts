@@ -1,6 +1,6 @@
 import type { WidgetConfig } from './widget.js';
+import { MAX_TIMER_DELAY_MS } from './timer-delay.js';
 
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export function parseAutoOpen(value?: string): boolean | number | undefined {
   if (value === undefined) return undefined;
