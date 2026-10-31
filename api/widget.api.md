@@ -214,6 +214,9 @@ export interface WidgetLocaleStrings {
     retryButton: string;
     messageWaiting: string;
     regenerateButton: string;
+    copyButton: string;
+    copySuccess: string;
+    copyFailure: string;
     suggestionsLabel: string;
     unreadCount: string;
     sourcesLabel: string;
