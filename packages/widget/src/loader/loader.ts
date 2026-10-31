@@ -4,6 +4,7 @@ import { HOST_ID, nextHostId, resolveDirection, setLanguageDirection } from '../
 import { applyTheme } from '../theme.js';
 import type { WidgetLocaleStrings } from '../i18n.js';
 import type { Widget, WidgetConfig, WidgetEventHandler, WidgetEventType, WidgetUpdate } from '../widget.js';
+import type { UserToken } from '../api/client.js';
 import { VERSION } from '../version.js';
 
 export interface PanelModule {
@@ -31,11 +32,17 @@ export interface ChatCopsLoader {
   /** Adds or replaces a language for `locale`: its strings (English for any left out), and `dir`. */
   registerLocale(code: string, strings: Partial<WidgetLocaleStrings>, options?: { dir?: 'ltr' | 'rtl' }): void;
   /** The signed-in visitor (token, name, email). Another user, or `null`, clears the chat. Kept until the chat loads. */
-  setUser(user: { name?: string; email?: string; token?: string } | null): void;
+  setUser(user: { name?: string; email?: string; token?: UserToken } | null): void;
   /** Details the bot should know for the next messages. `null` removes them. Kept until the chat loads. */
   setContext(data: Record<string, string> | null): void;
   /** Changes the theme, branding or wording of the chat. What you leave out stays as it is. Kept until the chat loads. */
   update(changes: WidgetUpdate): void;
+  /**
+   * Tells the chat whether the visitor accepted functional cookies. Until `true`, a chat with
+   * `waitForConsent` shows a notice and never touches storage or the API. `false` closes the
+   * chat and removes what it saved. Works before `init()` and before the chat loads.
+   */
+  setConsent(consent: boolean): void;
   /** The widget's version. */
   readonly version: string;
 }
@@ -89,6 +96,7 @@ export function createLoader(
   loadPanel: () => Promise<PanelModule>,
   loadLocale: (locale: string) => Promise<LocaleModule> | undefined = () => undefined
 ): ChatCopsLoader {
+  const scriptNonce = typeof document !== 'undefined' ? document.currentScript?.nonce || undefined : undefined;
   let config: WidgetConfig | undefined;
   let widget: Widget | undefined;
   let loading: Promise<Widget | undefined> | undefined;
@@ -103,6 +111,8 @@ export function createLoader(
   // so a signed-in page doesn't load the chat early.
   let user: Parameters<ChatCopsLoader['setUser']>[0] | undefined;
   let context: Record<string, string> | null | undefined;
+  // setConsent() before the chat loads, or before init(): kept across init() like the user.
+  let consent: boolean | undefined;
   // update() calls before the chat loads, for this init() only.
   let updates: WidgetUpdate[] = [];
   const directionOf = (current: WidgetConfig) => current.dir ?? (current.locale ? registered.get(current.locale)?.dir : undefined);
@@ -154,6 +164,7 @@ export function createLoader(
         // Swapped in one task, so the page never paints without a button.
         launcher?.remove();
         launcher = button = undefined;
+        if (consent !== undefined) next.setConsent(consent);
         next.init();
         if (user !== undefined) next.setUser(user);
         if (context !== undefined) next.setContext(context);
@@ -185,6 +196,7 @@ export function createLoader(
     document.body.appendChild(launcher);
     const shadow = launcher.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
+    if (current.nonce) style.nonce = current.nonce;
     style.textContent = launcherStyles;
     shadow.appendChild(style);
     if (current.theme) applyTheme(shadow, current.theme);
@@ -211,18 +223,19 @@ export function createLoader(
   const api: ChatCopsLoader = {
     init(next) {
       api.destroy();
-      config = next;
-      if (next.mode === 'inline') {
+      const current = { ...next, nonce: next.nonce ?? scriptNonce };
+      config = current;
+      if (current.mode === 'inline') {
         void mount();
         return;
       }
-      showLauncher(next);
-      if (next.autoOpen !== undefined && next.autoOpen !== false) {
-        timers.push(setTimeout(() => api.open(), next.autoOpen === true ? 0 : next.autoOpen));
+      showLauncher(current);
+      if (current.autoOpen !== undefined && current.autoOpen !== false) {
+        timers.push(setTimeout(() => api.open(), current.autoOpen === true ? 0 : current.autoOpen));
       }
-      if (next.welcomeBubble) {
+      if (current.welcomeBubble) {
         // The chat loads when the bubble is due, and shows it right away.
-        const bubble = next.welcomeBubble;
+        const bubble = current.welcomeBubble;
         timers.push(setTimeout(() => void mount({ welcomeBubble: { ...bubble, delay: 0 } }), bubble.delay ?? DEFAULT_BUBBLE_DELAY));
       }
     },
@@ -265,6 +278,11 @@ export function createLoader(
     setContext(next) {
       context = next;
       widget?.setContext(next);
+    },
+
+    setConsent(next) {
+      consent = next;
+      widget?.setConsent(next);
     },
 
     update(changes) {

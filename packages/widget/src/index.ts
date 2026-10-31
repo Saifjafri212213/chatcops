@@ -8,6 +8,7 @@ import {
 import { configFromScript } from './script-config.js';
 import { setLanguageDirection } from './dom/shadow.js';
 import { registerWidgetLocale, type WidgetLocaleStrings } from './i18n.js';
+import type { UserToken } from './api/client.js';
 import { VERSION } from './version.js';
 
 export {
@@ -23,10 +24,13 @@ export {
 export type { MessageData, MessageErrorType, MessageStatus } from './dom/messages.js';
 export type { ThemeConfig, ThemeMode } from './theme.js';
 export type { Persistence } from './storage.js';
+export type { UserToken } from './api/client.js';
 export type { WidgetLocaleStrings } from './i18n.js';
 export { parseAutoOpen } from './script-config.js';
 
 let instance: Widget | null = null;
+// Kept without an instance, so `setConsent()` can come before `init()`; like the loader's, it outlives `destroy()`.
+let consent: boolean | undefined;
 const persistentHandlers = new Map<WidgetEventType, Set<WidgetEventHandler<never>>>();
 
 const ChatCops = {
@@ -34,12 +38,13 @@ const ChatCops = {
     if (instance) {
       instance.destroy();
     }
-    instance = new Widget(config);
+    instance = new Widget({ ...config, nonce: config.nonce ?? scriptNonce });
     for (const [event, handlers] of persistentHandlers) {
       for (const handler of handlers) {
         instance.on(event, handler as WidgetEventHandler);
       }
     }
+    if (consent !== undefined) instance.setConsent(consent);
     instance.init();
     return instance;
   },
@@ -84,13 +89,23 @@ const ChatCops = {
    * The signed-in visitor: `token` for the server, `name` and `email` as
    * visitor details. Another user, or `null` to sign out, clears the chat.
    */
-  setUser(user: { name?: string; email?: string; token?: string } | null): void {
+  setUser(user: { name?: string; email?: string; token?: UserToken } | null): void {
     instance?.setUser(user);
   },
 
   /** Details the bot should know for the next messages, such as `{ plan: 'Team' }`. `null` removes them. */
   setContext(data: Record<string, string> | null): void {
     instance?.setContext(data);
+  },
+
+  /**
+   * Whether the visitor accepted functional cookies, for a chat with `waitForConsent`. `true` shows the chat;
+   * `false` closes it and removes what it saved in this browser. May come before `init()`; the last call wins.
+   * While consent is missing `sendMessage()` resolves without sending, so don't wait on a reply.
+   */
+  setConsent(value: boolean): void {
+    consent = value;
+    instance?.setConsent(value);
   },
 
   /** Changes the theme, branding or wording of the running chat. What you leave out stays as it is. */
@@ -133,7 +148,8 @@ function autoInit(script: HTMLScriptElement | null): void {
 
 // Capture currentScript synchronously, then init on DOMContentLoaded
 const currentScript = typeof document !== 'undefined' ? (document.currentScript as HTMLScriptElement | null) : null;
-if (currentScript && currentScript.dataset.apiUrl) {
+const scriptNonce = currentScript?.nonce || undefined;
+if (currentScript?.dataset.apiUrl) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => autoInit(currentScript), { once: true });
   } else {

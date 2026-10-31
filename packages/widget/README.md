@@ -90,7 +90,7 @@ ChatCops.init({
   welcomeBubble: {
     text: 'Need help? Chat with us!',
     delay: 3000,                        // ms before showing
-    showOnce: true,                     // per session
+    showOnce: true,                     // once per browser ('local'), per tab ('session'), every load ('none')
   },
   placeholder: 'Type a message...',
 
@@ -101,6 +101,7 @@ ChatCops.init({
   pageContext: true,                     // send page URL/title to API
   autoOpen: 5000,                       // auto-open after ms (popup only)
   locale: 'en',
+  privacyUrl: 'https://example.com/privacy', // link in header menu (https: or http:)
 
   // Callbacks
   onOpen: () => {},
@@ -112,7 +113,7 @@ ChatCops.init({
 
 ## API
 
-```typescript
+```text
 ChatCops.init(config)         // Initialize the widget
 ChatCops.open()               // Open the chat panel (popup mode)
 ChatCops.close()              // Close the chat panel
@@ -146,7 +147,8 @@ All configuration can be set via `data-*` attributes:
   data-welcome-bubble-delay="3000"
   data-placeholder="Type here..."
   data-locale="en"
-  data-auto-open="true">
+  data-auto-open="true"
+  data-privacy-url="https://example.com/privacy">
 </script>
 ```
 

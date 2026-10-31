@@ -1,8 +1,8 @@
 import { createShadowRoot, destroyShadowRoot } from './dom/shadow.js';
 import { FAB } from './dom/fab.js';
 import { Panel, type PanelLabels } from './dom/panel.js';
-import { WelcomeBubble } from './dom/bubble.js';
-import { ChatClient } from './api/client.js';
+import { BUBBLE_SHOWN_KEY, WelcomeBubble } from './dom/bubble.js';
+import { ChatClient, type UserToken } from './api/client.js';
 import { ConversationStorage, type Persistence } from './storage.js';
 import { claimNamespace, type ClaimedNamespace } from './namespace.js';
 import { applyTheme, type ThemeConfig } from './theme.js';
@@ -41,6 +41,8 @@ export interface PreChatFormConfig {
 
 export interface WidgetConfig {
   apiUrl: string;
+  /** CSP nonce applied to the widget's injected style elements. */
+  nonce?: string;
   /** Request/stream inactivity timeout in milliseconds. Defaults to 30000. */
   timeout?: number;
   /**
@@ -51,8 +53,11 @@ export interface WidgetConfig {
   /**
    * For a visitor your site has signed in: an HS256 JWT your server signs
    * with the chat server's `identity.secret` (`sub`, `exp`, optional `tier`).
+   * Give a function (it may be async) to get a fresh token each time the
+   * widget asks for a session; if it fails or takes over 5 seconds, the
+   * session starts without the visitor.
    */
-  userToken?: string;
+  userToken?: UserToken;
   mode?: 'popup' | 'inline';
   /**
    * Names this widget's saved conversation. Set a different one on each widget
@@ -103,12 +108,22 @@ export interface WidgetConfig {
   onError?: (error: Error) => void;
   onLeadCaptured?: (leadData?: Record<string, unknown>) => void;
   onPreChatSubmit?: (data: Record<string, string>) => void;
+  /**
+   * Holds the chat until `setConsent(true)`: it shows a notice instead of the
+   * conversation, and reads and writes no storage and calls no API meanwhile.
+   * Default false.
+   */
+  waitForConsent?: boolean;
+  /** Called by the notice's button, to open the site's own consent banner. Without it the button is left out. */
+  onConsentRequest?: () => void;
+  /** A link in the header menu to your site's privacy policy (https: or http: only). */
+  privacyUrl?: string;
 }
 
 /** What `update()` can change on a running chat. */
 export type WidgetUpdate = Pick<
   WidgetConfig,
-  'branding' | 'welcomeMessage' | 'disclosure' | 'suggestions' | 'placeholder' | 'strings'
+  'branding' | 'welcomeMessage' | 'disclosure' | 'suggestions' | 'placeholder' | 'strings' | 'privacyUrl'
 > & { theme?: Omit<ThemeConfig, 'position'> };
 
 /** What each widget event passes to its handlers. */
@@ -182,12 +197,19 @@ export class Widget {
   /** Visitor details came from setUser(), so they're sent without a pre-chat form. */
   private userFromSite = false;
   private abortController?: AbortController;
+  /** The visitor pressed Stop, so the abort that follows is not an error. */
+  private stopped = false;
+  /** Messages sent while offline, for this page view only: never saved. Sent when the connection is back. */
+  private waiting: MessageData[] = [];
   private retryRequests = new Map<string, SendRequestOptions>();
   private eventHandlers = new Map<WidgetEventType, Set<AnyHandler>>();
   private containerEl?: HTMLElement;
   private autoOpenTimer?: ReturnType<typeof setTimeout>;
   private unreadReplies = 0;
   private savedOverflow?: { value: string; priority: string };
+  /** The visitor accepted functional cookies, or the site doesn't wait for them. */
+  private consented: boolean;
+  private consentEl?: HTMLElement;
 
   get isInline(): boolean {
     return this.config.mode === 'inline';
@@ -205,8 +227,9 @@ export class Widget {
     );
     const persistence = config.persistence ?? 'local';
     this.storage = new ConversationStorage(this.namespace.siteId, persistence, config.historyTtlDays);
-    this.client = new ChatClient({ ...config, store: this.storage.store });
     this.locale = getWidgetLocale(config.locale ?? 'en', config.strings);
+    this.consented = !config.waitForConsent;
+    this.client = new ChatClient({ ...config, store: this.storage.store });
   }
 
   private resolveContainer(): HTMLElement {
@@ -227,11 +250,12 @@ export class Widget {
     prefetch(this.config);
     if (this.isInline) {
       this.containerEl = this.resolveContainer();
-      this.shadow = createShadowRoot(this.containerEl, { dir: this.config.dir, locale: this.config.locale });
+      this.shadow = createShadowRoot(this.containerEl, { dir: this.config.dir, locale: this.config.locale, nonce: this.config.nonce });
     } else {
-      this.shadow = createShadowRoot(undefined, { dir: this.config.dir, locale: this.config.locale });
+      this.shadow = createShadowRoot(undefined, { dir: this.config.dir, locale: this.config.locale, nonce: this.config.nonce });
     }
     this.mounted = true;
+    window.addEventListener('online', this.sendWaiting);
 
     if (this.config.theme) {
       applyTheme(this.shadow, this.config.theme);
@@ -265,7 +289,10 @@ export class Widget {
         ...this.actionLabels(),
       },
       onSend: (text) => this.handleSend(text),
+      onStop: () => this.stopReply(),
       onClose: () => this.close(),
+      onNewConversation: () => this.newConversation(),
+      onDownloadTranscript: () => this.downloadTranscript(),
     });
 
     if (this.config.disclosure === false) {
@@ -279,18 +306,7 @@ export class Widget {
     // conversation when it's first opened, so nothing touches storage before.
     if (this.isInline) this.hydrate();
 
-    // Welcome bubble — popup mode only
-    if (!this.isInline && this.config.welcomeBubble) {
-      this.bubble = new WelcomeBubble(this.shadow, {
-        text: this.config.welcomeBubble.text,
-        delay: this.config.welcomeBubble.delay,
-        showOnce: this.config.welcomeBubble.showOnce ?? true,
-        store: this.storage.store,
-        position,
-        dismissLabel: this.locale.dismissBubble,
-        onClick: () => this.open(),
-      });
-    }
+    if (this.consented) this.createBubble();
 
     // Inline mode — show panel immediately
     if (this.isInline) {
@@ -304,9 +320,78 @@ export class Widget {
     }
   }
 
+  /** The welcome bubble (popup mode), once storage may be used for its "shown" flag. */
+  private createBubble(): void {
+    if (this.isInline || this.bubble || !this.config.welcomeBubble) return;
+    this.bubble = new WelcomeBubble(this.shadow, {
+      text: this.config.welcomeBubble.text,
+      delay: this.config.welcomeBubble.delay,
+      showOnce: this.config.welcomeBubble.showOnce ?? true,
+      store: this.storage.store,
+      position: this.config.theme?.position ?? 'bottom-right',
+      dismissLabel: this.locale.dismissBubble,
+      onClick: () => this.open(),
+    });
+  }
+
+  /**
+   * The visitor's answer on functional cookies. Until `true`, a widget with `waitForConsent`
+   * shows a notice and touches no storage or API. `false` closes the chat and removes what it
+   * saved (the conversation, the session token and the bubble's flag).
+   */
+  setConsent(consent: boolean): void {
+    if (consent === this.consented) return;
+    // Not mounted yet: nothing has been read or saved, and init() follows the flag.
+    if (this.destroyed || !this.mounted) {
+      this.consented = consent;
+      return;
+    }
+    if (consent) {
+      this.consented = true;
+      this.consentEl?.remove();
+      this.panel.setBodyVisible(true);
+      this.createBubble();
+      if (this.isInline || this.panel.isVisible) this.hydrate();
+      return;
+    }
+    // Cleared while the gate is still open; after this nothing is read or written.
+    this.reset(true, false);
+    this.hydrated = false;
+    this.storage.store.remove(BUBBLE_SHOWN_KEY);
+    this.client.forgetSession();
+    this.consented = false;
+    this.bubble?.destroy();
+    this.bubble = undefined;
+    if (this.isInline) this.hydrate();
+    else if (this.panel.isVisible) this.close();
+  }
+
+  private showConsentNotice(): void {
+    if (this.consentEl?.isConnected) return;
+    this.panel.setBodyVisible(false);
+    const notice = document.createElement('div');
+    notice.className = 'cc-consent';
+    notice.textContent = this.locale.consentNotice;
+    const { onConsentRequest } = this.config;
+    if (onConsentRequest) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cc-consent-btn';
+      button.textContent = this.locale.consentButton;
+      button.addEventListener('click', () => onConsentRequest());
+      notice.appendChild(button);
+    }
+    this.panel.messagesContainer.appendChild(notice);
+    this.consentEl = notice;
+  }
+
   /** Reads the saved conversation and shows it, or the pre-chat form. Runs once. */
   private hydrate(): void {
     if (this.hydrated) return;
+    if (!this.consented) {
+      this.showConsentNotice();
+      return;
+    }
     this.hydrated = true;
     const saved = this.storage.load();
     if (saved) {
@@ -389,12 +474,28 @@ export class Widget {
     this.reset(true);
   }
 
-  private reset(forget: boolean): void {
+  /** Saves the visible conversation as a text file. */
+  private downloadTranscript(): void {
+    const text = this.messages
+      .filter((m) => m.content?.trim())
+      .map((m) => `${m.role === 'user' ? 'Visitor' : 'Assistant'}: ${m.content}`)
+      .join('\n\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    a.download = 'transcript.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 100);
+  }
+
+  private reset(forget: boolean, show = true): void {
+    // Waiting for consent: there is nothing to reset, and the notice stays up.
+    if (!this.consented) return;
     this.generation++;
     this.abortController?.abort();
     this.abortController = undefined;
     this.isStreaming = false;
     this.retryRequests.clear();
+    this.waiting = [];
     this.messages = [];
     this.conversationId = crypto.randomUUID();
     // Nothing old to restore into the new conversation.
@@ -407,7 +508,8 @@ export class Widget {
     this.preChatFormEl?.destroy();
     this.preChatFormEl = undefined;
     this.panel.messages.clear();
-    this.panel.input.setDisabled(false);
+    this.panel.input.setStreaming(false);
+    if (!show) return;
     if (this.config.preChatForm?.enabled && !this.preChatDone) this.showPreChatForm();
     else this.showChatView();
     if (!forget) this.saveHistory();
@@ -415,16 +517,19 @@ export class Widget {
 
   /**
    * The signed-in visitor. `token` is the identity token for the server
-   * (signed-in visitors); `name` and `email` are sent as visitor details, and
-   * the name greets them. Switching to another user, or signing out with
-   * `null`, clears the chat, so one person's conversation never shows for
-   * the next.
+   * (signed-in visitors), or a function that returns one, as `userToken`
+   * does; `name` and `email` are sent as visitor details, and the name
+   * greets them. Switching to another user, or signing out with `null`,
+   * clears the chat, so one person's conversation never shows for the next.
+   * The same function passed again counts as the same visitor; any other
+   * function, a string or no token counts as another.
    */
-  setUser(user: { name?: string; email?: string; token?: string } | null): void {
+  setUser(user: { name?: string; email?: string; token?: UserToken } | null): void {
     const previous = this.client.identity;
     const token = user?.token;
     if (previous !== undefined && previous !== token) this.clear();
-    this.client.setUserToken(token);
+    // While waiting, the stored session token is left alone: setUserToken() drops the one in memory.
+    this.client.setUserToken(token, this.consented);
     if (!user) return;
     const details = Object.fromEntries(
       Object.entries({ name: user.name, email: user.email }).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== '')
@@ -477,7 +582,7 @@ export class Widget {
   }
 
   private panelLabels(): PanelLabels {
-    const { branding, placeholder } = this.config;
+    const { branding, placeholder, privacyUrl } = this.config;
     const l = this.locale;
     return {
       branding: {
@@ -489,6 +594,12 @@ export class Widget {
       footerText: l.poweredBy,
       closeLabel: l.closeButton,
       sendLabel: l.sendButton,
+      stopLabel: l.stopButton,
+      moreLabel: l.moreButton,
+      newConversationLabel: l.newConversation,
+      downloadTranscriptLabel: l.downloadTranscript,
+      privacyLabel: l.privacy,
+      privacyUrl,
     };
   }
 
@@ -521,6 +632,7 @@ export class Widget {
     if (this.autoOpenTimer !== undefined) clearTimeout(this.autoOpenTimer);
     this.abortController?.abort();
     this.abortController = undefined;
+    window.removeEventListener('online', this.sendWaiting);
     this.restoreScroll();
     this.preChatFormEl?.destroy();
     this.bubble?.destroy();
@@ -578,8 +690,7 @@ export class Widget {
 
   private showPreChatForm(): void {
     const formConfig = this.config.preChatForm!;
-    this.panel.hideMessages();
-    this.panel.input.setVisible(false);
+    this.panel.setBodyVisible(false);
 
     loadPreChatForm().then(
       ({ PreChatForm }) => {
@@ -591,6 +702,7 @@ export class Widget {
           fields: formConfig.fields,
           submitLabel: formConfig.submitLabel ?? this.locale.preChatSubmit,
           locale: this.locale,
+          nonce: this.config.nonce,
           onSubmit: (data) => this.handlePreChatSubmit(data),
         });
       },
@@ -599,8 +711,7 @@ export class Widget {
         console.error('[chatcops] The pre-chat form could not load:', error instanceof Error ? error.message : error);
         if (this.destroyed || this.preChatDone) return;
         this.preChatDone = true;
-        this.panel.showMessages();
-        this.panel.input.setVisible(true);
+        this.panel.setBodyVisible(true);
         this.showChatView();
       }
     );
@@ -616,8 +727,7 @@ export class Widget {
     this.preChatFormEl?.destroy();
     this.preChatFormEl = undefined;
 
-    this.panel.showMessages();
-    this.panel.input.setVisible(true);
+    this.panel.setBodyVisible(true);
 
     this.showChatView();
 
@@ -657,7 +767,7 @@ export class Widget {
   }
 
   private async handleSend(text: string): Promise<void> {
-    if (this.isStreaming) return;
+    if (this.isStreaming || !this.consented) return;
     // A message sent before the chat was opened still joins the saved conversation.
     this.hydrate();
 
@@ -666,12 +776,36 @@ export class Widget {
       role: 'user',
       content: text,
     };
-    this.messages.push(userMsg);
     this.panel.addMessage(userMsg);
+    if (!navigator.onLine) {
+      this.waiting.push(userMsg);
+      this.panel.messages.setWaiting(userMsg.id, this.locale.messageWaiting);
+      return;
+    }
+    await this.deliver(userMsg);
+  }
+
+  private async deliver(userMsg: MessageData): Promise<void> {
+    this.messages.push(userMsg);
     this.config.onMessage?.(userMsg);
     this.emit('message', userMsg);
+    await this.sendToServer(userMsg.content, { userMessageId: userMsg.id });
+  }
 
-    await this.sendToServer(text, { userMessageId: userMsg.id });
+  /** The connection is back: sends what waited, in order, one at a time. */
+  private sendWaiting = async (): Promise<void> => {
+    if (this.isStreaming) return;
+    while (this.waiting.length && navigator.onLine && !this.destroyed) {
+      const next = this.waiting.shift() as MessageData;
+      this.panel.messages.setWaiting(next.id);
+      await this.deliver(next);
+    }
+  };
+
+  /** Ends the reply that's streaming. What has streamed stays, as a finished reply. */
+  private stopReply(): void {
+    this.stopped = true;
+    this.abortController?.abort();
   }
 
   private async handleRetry(errorMessageId: string): Promise<void> {
@@ -736,7 +870,8 @@ export class Widget {
     const generation = this.generation;
 
     this.isStreaming = true;
-    this.panel.input.setDisabled(true);
+    this.stopped = false;
+    this.panel.input.setStreaming(true);
     this.panel.messages.clearRegenerateButtons();
     this.panel.messages.beginReply();
     this.panel.messages.showTyping();
@@ -763,6 +898,7 @@ export class Widget {
       )) {
         if (this.isStale(generation)) break;
         if (chunk.error) {
+          if (this.stopped) break;
           const errorType = this.resolveErrorType(chunk.error);
           this.markFailed(assistantMsg, this.getErrorMessage(errorType, chunk.retryAfterMs));
           assistantMsg.errorType = errorType;
@@ -877,7 +1013,7 @@ export class Widget {
       if (!this.isStale(generation)) {
         this.panel.messages.finishReply(assistantMsg);
         this.isStreaming = false;
-        this.panel.input.setDisabled(false);
+        this.panel.input.setStreaming(false);
         this.panel.input.focus();
         this.saveHistory();
       }

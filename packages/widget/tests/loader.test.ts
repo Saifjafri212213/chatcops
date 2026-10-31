@@ -67,12 +67,70 @@ describe('the script tag loader', () => {
     expect(launcherButton()).not.toBeNull();
     expect(launcherButton()?.getAttribute('aria-label')).toBe('Open chat');
     expect(launcherButton()?.classList.contains('cc-left')).toBe(true);
+    expect(shadow()?.querySelector('style')?.hasAttribute('nonce')).toBe(false);
     expect(host()?.style.getPropertyValue('--cc-theme-accent')).toBe('#16a34a');
     expect(shadow()?.querySelector('.cc-panel')).toBeNull();
     expect(load).not.toHaveBeenCalled();
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+    loader.destroy();
+  });
+
+  it('applies the configured nonce to launcher and panel styles', async () => {
+    const { load } = panel();
+    const loader = createLoader(load);
+    loader.init({ apiUrl: 'https://api.test/chat', nonce: 'request-nonce' });
+
+    expect(shadow()?.querySelector('style')?.nonce).toBe('request-nonce');
+    loader.open();
+    await settle();
+    expect(shadow()?.querySelector('style')?.nonce).toBe('request-nonce');
+
+    loader.destroy();
+  });
+
+  it('uses the script nonce for launcher and panel styles when manual init omits it', async () => {
+    const script = document.createElement('script');
+    script.nonce = 'script-nonce';
+    Object.defineProperty(document, 'currentScript', { value: script, configurable: true });
+    const { load } = panel();
+    const loader = createLoader(load);
+    Object.defineProperty(document, 'currentScript', { value: null, configurable: true });
+
+    loader.init({ apiUrl: 'https://api.test/chat' });
+
+    expect(shadow()?.querySelector('style')?.nonce).toBe('script-nonce');
+    loader.open();
+    await settle();
+    expect(shadow()?.querySelector('style')?.nonce).toBe('script-nonce');
+    loader.destroy();
+  });
+
+  it('prefers an explicit nonce over the script nonce', () => {
+    const script = document.createElement('script');
+    script.nonce = 'script-nonce';
+    Object.defineProperty(document, 'currentScript', { value: script, configurable: true });
+    const { load } = panel();
+    const loader = createLoader(load);
+    Object.defineProperty(document, 'currentScript', { value: null, configurable: true });
+
+    loader.init({ apiUrl: 'https://api.test/chat', nonce: 'config-nonce' });
+
+    expect(shadow()?.querySelector('style')?.nonce).toBe('config-nonce');
+    loader.destroy();
+  });
+
+  it('does not add a nonce when the script has none', () => {
+    const script = document.createElement('script');
+    Object.defineProperty(document, 'currentScript', { value: script, configurable: true });
+    const { load } = panel();
+    const loader = createLoader(load);
+    Object.defineProperty(document, 'currentScript', { value: null, configurable: true });
+
+    loader.init({ apiUrl: 'https://api.test/chat' });
+
+    expect(shadow()?.querySelector('style')?.hasAttribute('nonce')).toBe(false);
     loader.destroy();
   });
 

@@ -52,6 +52,7 @@
 
 /* Panel header */
 .cc-header {
+  position: relative;
   display: flex;
   align-items: center;
   padding: 16px;
@@ -100,7 +101,8 @@
   color: var(--cc-text-secondary);
 }
 
-.cc-header-close {
+.cc-header-close,
+.cc-header-more {
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -111,16 +113,19 @@
   align-items: center;
   justify-content: center;
   transition: background 0.15s;
+  color: var(--cc-text-secondary);
 }
 
-.cc-header-close:hover {
+.cc-header-close:hover,
+.cc-header-more:hover {
   background: var(--cc-bg-input);
 }
 
-.cc-header-close svg {
+.cc-header-close svg,
+.cc-header-more svg {
   width: 16px;
   height: 16px;
-  fill: var(--cc-text-secondary);
+  fill: currentColor;
 }
 
 /* Messages area */
@@ -218,10 +223,26 @@
   text-decoration: underline;
 }
 
+.cc-consent {
+  margin: auto;
+  padding: 24px;
+  text-align: center;
+  color: var(--cc-text-secondary);
+}
+
+.cc-consent-btn {
+  margin-top: 12px;
+}
+
 .cc-message-error-note {
   margin-top: 6px;
   font-size: 12px;
   color: var(--cc-text-secondary);
+}
+
+.cc-message-waiting {
+  margin-top: 6px;
+  font-size: 12px;
 }
 
 .cc-message-sources {
@@ -279,6 +300,7 @@
   align-items: center;
 }
 
+.cc-consent-btn,
 .cc-message-retry,
 .cc-message-regenerate {
   display: inline-flex;
@@ -295,6 +317,7 @@
   transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
 
+.cc-consent-btn:hover,
 .cc-message-retry:hover,
 .cc-message-regenerate:hover {
   background: var(--cc-bg-input);
@@ -578,6 +601,8 @@
 
 /* Keyboard focus indicators (the launcher's are in launcher.css) */
 .cc-header-close:focus-visible,
+.cc-header-more:focus-visible,
+.cc-consent-btn:focus-visible,
 .cc-send-btn:focus-visible,
 .cc-suggestion:focus-visible,
 .cc-message-retry:focus-visible,

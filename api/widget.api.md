@@ -22,9 +22,10 @@ declare const _default: {
     setUser(user: {
         email?: string;
         name?: string;
-        token?: string;
+        token?: UserToken;
     } | null): void;
     setContext(data: Record<string, string> | null): void;
+    setConsent(value: boolean): void;
     update(changes: WidgetUpdate): void;
     destroy(): void;
     on<E extends WidgetEventType>(event: E, handler: WidgetEventHandler<E>): () => void;
@@ -83,10 +84,13 @@ export interface ThemeConfig {
 
 export type ThemeMode = 'light' | 'dark' | 'auto';
 
+export type UserToken = string | (() => string | undefined | Promise<string | undefined>);
+
 export declare class Widget {
     get isInline(): boolean;
     constructor(config: WidgetConfig);
     init(): void;
+    setConsent(consent: boolean): void;
     open(): void;
     close(): void;
     toggle(): void;
@@ -98,7 +102,7 @@ export declare class Widget {
     setUser(user: {
         email?: string;
         name?: string;
-        token?: string;
+        token?: UserToken;
     } | null): void;
     setContext(data: Record<string, string> | null): void;
     update(changes: WidgetUpdate): void;
@@ -109,9 +113,10 @@ export declare class Widget {
 
 export interface WidgetConfig {
     apiUrl: string;
+    nonce?: string;
     timeout?: number;
     turnstileSiteKey?: string;
-    userToken?: string;
+    userToken?: UserToken;
     mode?: 'popup' | 'inline';
     siteId?: string;
     container?: string | HTMLElement;
@@ -148,6 +153,9 @@ export interface WidgetConfig {
     onError?: (error: Error) => void;
     onLeadCaptured?: (leadData?: Record<string, unknown>) => void;
     onPreChatSubmit?: (data: Record<string, string>) => void;
+    waitForConsent?: boolean;
+    onConsentRequest?: () => void;
+    privacyUrl?: string;
 }
 
 export type WidgetEventHandler<E extends WidgetEventType = WidgetEventType> = (...args: WidgetEvents[E]) => void;
@@ -177,6 +185,7 @@ export interface WidgetLocaleStrings {
     welcomeMessage: string;
     inputPlaceholder: string;
     sendButton: string;
+    stopButton: string;
     closeButton: string;
     openChat: string;
     defaultName: string;
@@ -202,15 +211,21 @@ export interface WidgetLocaleStrings {
     preChatRequired: string;
     preChatInvalidEmail: string;
     retryButton: string;
+    messageWaiting: string;
     regenerateButton: string;
     suggestionsLabel: string;
     unreadCount: string;
     sourcesLabel: string;
     disclosure: string;
     disclosureLearnMore: string;
+    consentNotice: string;
+    consentButton: string;
+    moreButton: string;
+    downloadTranscript: string;
+    privacy: string;
 }
 
-export type WidgetUpdate = Pick<WidgetConfig, 'branding' | 'welcomeMessage' | 'disclosure' | 'suggestions' | 'placeholder' | 'strings'> & {
+export type WidgetUpdate = Pick<WidgetConfig, 'branding' | 'welcomeMessage' | 'disclosure' | 'suggestions' | 'placeholder' | 'strings' | 'privacyUrl'> & {
     theme?: Omit<ThemeConfig, 'position'>;
 };
 ```

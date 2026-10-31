@@ -9,6 +9,33 @@ const tempRoot = await mkdtemp(join(root, 'website', '.docs-check-'));
 const samplesRoot = join(tempRoot, 'samples');
 const samples = [];
 const skipped = [];
+// Every TypeScript block, skipped or not, for the session check below.
+const blocks = [];
+
+// 1.0 refuses to start a server without `sessionSecrets` (or `allowAnonymous: true`),
+// which type-checking can't see. Flags a handler built from an object literal that
+// has neither, or a full `ChatCopsServerConfig` that has neither, unless it spreads
+// another config in.
+const handlerCall = /\b(chatcopsMiddleware|chatcopsVercelHandler|chatcopsCloudflareHandler|chatcopsAiSdkHandler|createChatHandler)\(\s*\{|:\s*(ChatCopsServerConfig)\s*=\s*\{/g;
+function missingSessionConfig(code) {
+  const lines = [];
+  for (const match of code.matchAll(handlerCall)) {
+    let depth = 0;
+    let end = code.length;
+    for (let i = match.index + match[0].length - 1; i < code.length; i++) {
+      if (code[i] === '{') depth++;
+      else if (code[i] === '}' && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    const config = code.slice(match.index, end);
+    if (!/\b(sessionSecrets|allowAnonymous)\b|\.\.\./.test(config)) {
+      lines.push({ offset: code.slice(0, match.index).split('\n').length - 1, name: match[1] ? `${match[1]}()` : `A ${match[2]}` });
+    }
+  }
+  return lines;
+}
 
 async function findMdxFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -21,7 +48,12 @@ async function findMdxFiles(directory) {
 }
 
 try {
-  const files = (await findMdxFiles(docsRoot)).sort();
+  // The docs pages, and the READMEs, which npm and GitHub show and people copy from just as often.
+  const readmes = [];
+  for (const file of [join(root, 'README.md'), ...(await readdir(join(root, 'packages'))).map((name) => join(root, 'packages', name, 'README.md'))]) {
+    if (await readFile(file).then(() => true, () => false)) readmes.push(file);
+  }
+  const files = [...(await findMdxFiles(docsRoot)).sort(), ...readmes];
 
   for (const file of files) {
     const contents = await readFile(file, 'utf8');
@@ -37,6 +69,7 @@ try {
         blockLines = [];
       } else if (inTypeScript && /^```\s*$/.test(lines[i])) {
         const label = `${relative(root, file).split(sep).join('/')}:${firstLine}`;
+        blocks.push({ label: relative(root, file).split(sep).join('/'), line: firstLine, code: blockLines.join('\n') });
         if (blockLines[0]?.trim().startsWith('// docs-check: skip')) {
           skipped.push(label);
         } else {
@@ -46,6 +79,19 @@ try {
       } else if (inTypeScript) {
         blockLines.push(lines[i]);
       }
+    }
+  }
+
+  // The homepage's code and the server examples aren't type-checked here, but are copied just as often.
+  const examples = join(root, 'packages', 'server', 'src', 'examples');
+  for (const file of [join(root, 'website', 'src', 'components', 'react', 'CodeTabs.tsx'), ...(await readdir(examples)).map((name) => join(examples, name))]) {
+    blocks.push({ label: relative(root, file).split(sep).join('/'), line: 1, code: await readFile(file, 'utf8') });
+  }
+  let unsessioned = 0;
+  for (const block of blocks) {
+    for (const { offset, name } of missingSessionConfig(block.code)) {
+      console.error(`${block.label}:${block.line + offset}: ${name} has no \`sessionSecrets\` or \`allowAnonymous: true\`, so it doesn't start on 1.0.`);
+      unsessioned++;
     }
   }
 
@@ -102,6 +148,7 @@ try {
     '@upstash/redis': [join(root, 'packages', 'store-redis', 'node_modules', '@upstash', 'redis')],
     '@upstash/redis/*': [join(root, 'packages', 'store-redis', 'node_modules', '@upstash', 'redis', '*')],
     ioredis: [join(root, 'packages', 'store-redis', 'node_modules', 'ioredis')],
+    postgres: [join(root, 'packages', 'store-postgres', 'node_modules', 'postgres')],
   };
   const tsconfigPath = join(tempRoot, 'tsconfig.json');
   await writeFile(tsconfigPath, JSON.stringify({
@@ -150,8 +197,10 @@ try {
 
   console.log(`Checked ${samples.length} TypeScript blocks; skipped ${skipped.length}.`);
   if (skipped.length > 0) console.log(`Skipped: ${skipped.join(', ')}`);
+  if (unsessioned > 0) console.error(`${unsessioned} server examples would not start: add \`sessionSecrets\` (or \`allowAnonymous: true\` for a test).`);
   if (result.error) throw result.error;
   if (result.status !== 0) process.exitCode = result.status ?? 1;
+  else if (unsessioned > 0) process.exitCode = 1;
 } finally {
   await rm(tempRoot, { recursive: true, force: true });
 }

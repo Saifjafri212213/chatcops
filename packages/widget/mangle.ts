@@ -20,7 +20,7 @@ const EARLIER = [
  * an object key, never on another object, never in a string.
  */
 export const CHECKED = [
-  'announcement', 'autoResize', 'cleanupEmptyActionContainers', 'clearError', 'createActionButton',
+  'announcement', 'autoResize', 'consentEl', 'consented', 'createBubble', 'showConsentNotice', 'cleanupEmptyActionContainers', 'clearError', 'createActionButton',
   'createActionsContainer', 'createField', 'createMessageElement', 'createRequest', 'disclosureEl', 'endStream',
   'ensureActionsContainer', 'errorElements', 'escapeHtml', 'fieldElements', 'findLatestRegeneratableAssistant',
   'findMessage', 'findUserMessageForAssistant', 'getErrorMessage', 'handleKeydown', 'handlePreChatSubmit',

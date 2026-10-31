@@ -45,6 +45,10 @@ export default defineConfig({
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/codercops/chatcops' },
       ],
+      components: {
+        ThemeSelect: './src/components/ThemeToggle.astro',
+        MobileMenuFooter: './src/components/MobileMenuFooter.astro',
+      },
       head: [
         {
           tag: 'script',

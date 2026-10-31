@@ -5,6 +5,16 @@ description: All configuration options for the ChatCops widget.
 
 The widget can be configured via `data-*` attributes on the script tag or programmatically via `ChatCops.init()`.
 
+## Content Security Policy
+
+If your site's Content Security Policy requires a nonce for inline styles, add the same per-response nonce to the widget script tag. Script-tag installs, including `chatcops.full.min.js`, read their script element's `nonce` and apply it to the launcher, chat panel, and lazy pre-chat form styles, including when you call `ChatCops.init()` manually. An explicit `nonce` in the config takes precedence. For ESM and other programmatic `ChatCops.init()` calls that do not run from a script tag, pass it as `nonce`:
+
+```typescript
+ChatCops.init({ apiUrl: '/api/chat', nonce: 'YOUR_RESPONSE_NONCE' });
+```
+
+Include that nonce in your response's `style-src` policy. Generate a fresh, unpredictable nonce for each response and use it for both the policy and widget script.
+
 ## Display Modes
 
 ChatCops supports two display modes:
@@ -19,6 +29,7 @@ ChatCops supports two display modes:
 ```html
 <script
   src="https://cdn.jsdelivr.net/npm/@chatcops/widget/dist/chatcops.min.js"
+  nonce="YOUR_RESPONSE_NONCE"
   data-api-url="https://your-api.com/chat"
   data-accent="#6366f1"
   data-text-color="#FAFAF9"
@@ -35,6 +46,7 @@ ChatCops supports two display modes:
   data-placeholder="Type a message..."
   data-locale="en"
   data-auto-open="1000"
+  data-privacy-url="https://example.com/privacy"
 ></script>
 ```
 
@@ -164,6 +176,31 @@ The pre-chat form's answers are saved with the conversation, so they expire with
 
 `persistHistory` was removed in 1.0. A config that still sets it throws, so a site that asked for nothing to be saved never starts saving conversations. Use `persistence: 'none'` instead.
 
+### Waiting for cookie consent
+
+A site under a strict consent policy can hold the chat back until the visitor accepts functional cookies. Set `waitForConsent` (or `data-wait-for-consent` on the script tag) and the launcher shows as usual, but opening the chat shows a notice instead of the conversation: "Chat is available once you accept functional cookies." While it waits, the widget reads and writes no `localStorage` or `sessionStorage`, not even to check, and it makes no request to your chat server. The welcome bubble stays hidden too, since it remembers that it was shown.
+
+```typescript
+declare const consentBanner: { open(): void };
+
+ChatCops.init({
+  apiUrl: '/api/chat',
+  waitForConsent: true,
+  // The notice's button. Open your own consent banner here. Without it, the notice has no button.
+  onConsentRequest: () => consentBanner.open(),
+});
+
+// When the visitor accepts functional cookies:
+ChatCops.setConsent(true);
+
+// If they withdraw it later:
+ChatCops.setConsent(false);
+```
+
+`setConsent(true)` replaces the notice with the normal chat: the saved conversation comes back and the session starts. A chat the visitor has closed stays closed. It works before or after `init()`, and with the script tag build also before the chat has loaded. `setConsent(false)` closes the chat and removes what the widget saved in this browser (the conversation, the session token and the welcome bubble's flag), and the notice shows again on the next open. If the visitor never gave consent in this page view, `setConsent(false)` does nothing and touches no storage. While consent is missing, `sendMessage()` resolves without sending, so don't wait on a reply.
+
+The notice's wording is `consentNotice` and `consentButton` in the [locale](/widget/i18n/), and a language that doesn't have them yet shows them in English.
+
 ### AI disclosure
 
 A new conversation starts with a short note: "You're chatting with an AI assistant. It can make mistakes." The EU AI Act (Article 50) asks that people know when they're talking to an AI, and the note stays at the top of the chat, also after "New conversation". Its strings are `disclosure` and `disclosureLearnMore` in the locale, and a language that doesn't have them yet shows them in English.
@@ -182,6 +219,19 @@ ChatCops.init({
 
 `disclosure: false` (or `data-disclosure="false"`) removes it. The widget then logs a note in the console, because telling visitors some other way is up to you.
 
+### Privacy policy link
+
+Add `privacyUrl` (or `data-privacy-url` on the script tag) to show a "Privacy" link in the header's "More options" menu (`⋯`), opening your site's privacy policy in a new tab:
+
+```typescript
+ChatCops.init({
+  apiUrl: '/api/chat',
+  privacyUrl: 'https://example.com/privacy',
+});
+```
+
+Only `https:` and `http:` URLs are accepted. Invalid or unsafe URLs (such as `javascript:`) are omitted.
+
 ### Streaming inactivity timeout
 
 Set `timeout` in `ChatCops.init()` to change the inactivity timeout in milliseconds.
@@ -194,6 +244,16 @@ A response can stream for longer than the timeout as long as chunks keep arrivin
 A request that never responds, or a stream that stops sending data, fails with a
 timeout error. Use a larger value for backends with longer silent periods. This
 option is available through programmatic configuration.
+
+### Messages sent while offline
+
+If the browser reports it is offline (`navigator.onLine`), a message the visitor sends is shown with the note "Will send when you're back online" (the `messageWaiting` string) and is not sent. When the `online` event fires, the widget sends the waiting messages in order, one at a time, with no click needed. A message that then fails gets the usual error and Retry button, and the ones after it still go. If the connection drops again partway, the rest keep waiting. The `message` event for a waiting message fires when it is sent, not when it is typed.
+
+Waiting messages live in this page view only: they are not saved, so a reload, `ChatCops.newConversation()` or `ChatCops.clear()` drops them. The note is announced through the reply live region. A reply that fails because the connection drops in the middle is not part of this; it still shows the network error with Retry.
+
+### Stopping a reply
+
+While a reply streams, the send button becomes a Stop button, named by the `stopButton` string (`Stop` in English; a language without it shows the English one). Clicking it ends the request, so the server stops generating, and keeps the text that has streamed as a finished reply: no error, and the visitor can use Regenerate to ask again. The `message` event fires for it with `status: 'complete'`. If the visitor stops before any text has arrived, no reply appears. The text box stays locked while a reply streams, so Escape does not stop it and still closes the popup.
 
 ## WidgetConfig Interface
 
@@ -213,9 +273,10 @@ const leadForm: PreChatFormConfig = {
 // docs-check: skip, a reference listing rather than code to run
 interface WidgetConfig {
   apiUrl: string;
+  nonce?: string;                // CSP nonce for the widget's injected styles
   timeout?: number;              // Inactivity timeout in ms, default: 30000
   turnstileSiteKey?: string;     // Cloudflare Turnstile site key, when the server has `turnstile` set
-  userToken?: string;            // Your server's signed token for a signed-in visitor (server `identity`)
+  userToken?: string | (() => string | undefined | Promise<string | undefined>); // Your server's signed token for a signed-in visitor (server `identity`), or a function that returns a fresh one
 
   // Display mode
   mode?: 'popup' | 'inline';       // Default: 'popup'
@@ -248,17 +309,20 @@ interface WidgetConfig {
   welcomeBubble?: {           // Popup mode only
     text: string;             // Text shown on hover bubble
     delay?: number;           // ms before bubble appears
-    showOnce?: boolean;       // Only show once per session
+    showOnce?: boolean;       // Show only once (default: true): per browser with 'local' persistence, per tab with 'session', every page load with 'none'
   };
   placeholder?: string;       // Input placeholder text
   persistence?: 'local' | 'session' | 'none'; // Where the chat is saved, default: 'local'
   historyTtlDays?: number;    // Drop saved chats older than this, default: 30
+  waitForConsent?: boolean;   // Show a notice and use no storage or API until setConsent(true), default: false
+  onConsentRequest?: () => void; // The notice's button; leave it out to have no button
   maxMessages?: number;       // Max messages to persist, default: 50
   pageContext?: boolean;       // Send page URL/title, default: true
   autoOpen?: boolean | number; // Popup mode only. true = immediate, number = delay in ms
   locale?: string;            // Sent to the server with each message. Only English strings are built in
   dir?: 'ltr' | 'rtl' | 'auto'; // Text direction; defaults from locale, then document direction
   strings?: Partial<WidgetLocaleStrings>; // Custom i18n overrides
+  privacyUrl?: string;        // Link in header menu to your site's privacy policy (https: or http: only)
   preChatForm?: {
     enabled: boolean;
     title?: string;
@@ -316,6 +380,8 @@ See the [pre-chat form guide](/widget/pre-chat-form) for field behavior, validat
 | `data-dir` | `dir` | Text direction: `'ltr'`, `'rtl'` or `'auto'` |
 | `data-persistence` | `persistence` | `'local'`, `'session'` or `'none'` |
 | `data-history-ttl-days` | `historyTtlDays` | Days a saved conversation is kept |
+| `data-wait-for-consent` | `waitForConsent` | Wait for `ChatCops.setConsent(true)` before using storage or the API. `"false"` turns it off |
+| `data-privacy-url` | `privacyUrl` | Privacy policy link in header menu (https: or http: only) |
 | `data-turnstile-site-key` | `turnstileSiteKey` | Cloudflare Turnstile site key, when the server checks Turnstile |
 | `data-user-token` | `userToken` | Signed token for a signed-in visitor, when the server has `identity` set |
 
