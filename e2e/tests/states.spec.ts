@@ -169,6 +169,25 @@ for (const look of looks) {
       await expectAccessible(page);
     });
 
+    test('S19 a message waiting for the connection', async ({ page }) => {
+      await start(page, look);
+      await openChat(page);
+      await page.context().setOffline(true);
+      await ask(page, 'Are you there?');
+
+      await expect(page.locator('.cc-message-waiting')).toHaveText("Will send when you're back online");
+      await expect(page.locator('.cc-reply-announcement')).toHaveText("Will send when you're back online");
+      await expect(page.locator(input)).toBeEnabled();
+      await expectAccessible(page);
+
+      // Nothing is clicked: the widget sends it when the browser is back online.
+      await page.context().setOffline(false);
+      await expect(page.locator('.cc-message-assistant').last()).toContainText('Hello from the test server.');
+      await expect(page.locator('.cc-message-waiting')).toHaveCount(0);
+      await expect(page.locator('.cc-message-error-note')).toHaveCount(0);
+      await expectAccessible(page);
+    });
+
     test('S7 reply with sources', async ({ page }) => {
       await start(page, look);
       await openChat(page);
@@ -196,13 +215,17 @@ for (const look of looks) {
       await expectAccessible(page);
     });
 
-    test('S11 offline', async ({ page, context }) => {
+    // A message typed while the browser is offline waits (S19). This is the connection failing on a request
+    // that was sent: the network error, with Retry.
+    test('S11 connection lost', async ({ page }) => {
       await start(page, look);
       await openChat(page);
-      await context.setOffline(true);
+      await page.route('**/api/chat', (route) =>
+        route.request().method() === 'POST' ? route.abort('internetdisconnected') : route.fallback()
+      );
       await ask(page, 'Hi');
       await expect(page.locator('.cc-message-retry')).toBeVisible();
-      await context.setOffline(false);
+      await expect(page.locator('.cc-message-waiting')).toHaveCount(0);
       await expectAccessible(page);
     });
 

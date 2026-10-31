@@ -231,6 +231,12 @@ A request that never responds, or a stream that stops sending data, fails with a
 timeout error. Use a larger value for backends with longer silent periods. This
 option is available through programmatic configuration.
 
+### Messages sent while offline
+
+If the browser reports it is offline (`navigator.onLine`), a message the visitor sends is shown with the note "Will send when you're back online" (the `messageWaiting` string) and is not sent. When the `online` event fires, the widget sends the waiting messages in order, one at a time, with no click needed. A message that then fails gets the usual error and Retry button, and the ones after it still go. If the connection drops again partway, the rest keep waiting. The `message` event for a waiting message fires when it is sent, not when it is typed.
+
+Waiting messages live in this page view only: they are not saved, so a reload, `ChatCops.newConversation()` or `ChatCops.clear()` drops them. The note is announced through the reply live region. A reply that fails because the connection drops in the middle is not part of this; it still shows the network error with Retry.
+
 ### Stopping a reply
 
 While a reply streams, the send button becomes a Stop button, named by the `stopButton` string (`Stop` in English; a language without it shows the English one). Clicking it ends the request, so the server stops generating, and keeps the text that has streamed as a finished reply: no error, and the visitor can use Regenerate to ask again. The `message` event fires for it with `status: 'complete'`. If the visitor stops before any text has arrived, no reply appears. The text box stays locked while a reply streams, so Escape does not stop it and still closes the popup.
