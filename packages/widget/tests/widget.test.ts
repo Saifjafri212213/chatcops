@@ -123,6 +123,98 @@ describe('Widget', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  describe('auto-open and the bubble delay', () => {
+    const MAX = 2_147_483_647;
+    const DAY = 86_400_000;
+    const start = (config: Record<string, unknown>) => {
+      const onOpen = vi.fn();
+      const widget = new Widget({ apiUrl: 'https://api.test/chat', onOpen, ...config });
+      widget.init();
+      return { widget, onOpen };
+    };
+    const bubbleOf = (widget: Widget) => getInternals(widget).shadow.querySelector('.cc-bubble') as HTMLElement;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('opens at once for true and for 0, and after a valid delay', () => {
+      for (const [autoOpen, at] of [[true, 0], [0, 0], [1000, 1000], [DAY, DAY], [MAX, MAX]] as const) {
+        const { widget, onOpen } = start({ autoOpen });
+        if (at > 0) {
+          vi.advanceTimersByTime(at - 1);
+          expect(onOpen, String(autoOpen)).not.toHaveBeenCalled();
+        }
+        vi.advanceTimersByTime(at === 0 ? 0 : 1);
+        expect(onOpen, String(autoOpen)).toHaveBeenCalledTimes(1);
+        widget.destroy();
+      }
+    });
+
+    it.each([3_000_000_000, Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY])(
+      'does not open at once for an autoOpen delay of %s, which is past what setTimeout holds',
+      (autoOpen) => {
+        const { widget, onOpen } = start({ autoOpen });
+        vi.advanceTimersByTime(0);
+        vi.advanceTimersByTime(DAY);
+        expect(onOpen).not.toHaveBeenCalled();
+        // It waits for the longest delay there is.
+        vi.advanceTimersByTime(MAX - DAY);
+        expect(onOpen).toHaveBeenCalledTimes(1);
+        widget.destroy();
+      },
+    );
+
+    it.each([Number.NaN, -1, -3000, Number.NEGATIVE_INFINITY, '500', null, false])('never auto-opens for autoOpen %j', (autoOpen) => {
+      const { widget, onOpen } = start({ autoOpen });
+      vi.advanceTimersByTime(MAX);
+      expect(onOpen).not.toHaveBeenCalled();
+      widget.destroy();
+    });
+
+    it('shows the bubble after a valid delay, and at once for 0', () => {
+      for (const delay of [0, 1500]) {
+        // The bubble shows once per browser, so each one starts clean.
+        localStorage.clear();
+        const { widget } = start({ welcomeBubble: { text: 'Hi', delay } });
+        if (delay) {
+          vi.advanceTimersByTime(delay - 1);
+          expect(bubbleOf(widget).classList.contains('cc-visible'), String(delay)).toBe(false);
+        }
+        vi.advanceTimersByTime(delay ? 1 : 0);
+        expect(bubbleOf(widget).classList.contains('cc-visible'), String(delay)).toBe(true);
+        widget.destroy();
+      }
+    });
+
+    it.each([Number.NaN, -1, -3000, Number.NEGATIVE_INFINITY, '2000', null])(
+      'uses the default of 3000 ms when the bubble delay is %j',
+      (delay) => {
+        const { widget } = start({ welcomeBubble: { text: 'Hi', delay } });
+        vi.advanceTimersByTime(0);
+        expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(false);
+        vi.advanceTimersByTime(2998);
+        expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(false);
+        vi.advanceTimersByTime(2);
+        expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(true);
+        widget.destroy();
+      },
+    );
+
+    it.each([3_000_000_000, Number.POSITIVE_INFINITY])('does not show the bubble at once for a delay of %s', (delay) => {
+      const { widget } = start({ welcomeBubble: { text: 'Hi', delay } });
+      vi.advanceTimersByTime(0);
+      vi.advanceTimersByTime(DAY);
+      expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(false);
+      vi.advanceTimersByTime(MAX - DAY);
+      expect(bubbleOf(widget).classList.contains('cc-visible')).toBe(true);
+      widget.destroy();
+    });
+  });
+
   it.each(['bottom-right', 'bottom-left'] as const)(
     'restores the %s launcher state after closing from the panel header',
     (position) => {

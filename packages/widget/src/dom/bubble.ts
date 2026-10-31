@@ -1,4 +1,5 @@
 import type { KeyStore } from '../storage.js';
+import { timerDelay } from '../timer-delay.js';
 
 export interface BubbleOptions {
   text: string;
@@ -57,7 +58,7 @@ export class WelcomeBubble {
       }
       this.el.classList.add('cc-visible');
       this.setHidden(false);
-    }, options.delay ?? 3000);
+    }, timerDelay(options.delay) ?? 3000);
   }
 
   hide(): void {

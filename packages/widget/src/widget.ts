@@ -3,6 +3,7 @@ import { FAB } from './dom/fab.js';
 import { Panel, type PanelLabels } from './dom/panel.js';
 import { BUBBLE_SHOWN_KEY, WelcomeBubble } from './dom/bubble.js';
 import { ChatClient, type UserToken } from './api/client.js';
+import { timerDelay } from './timer-delay.js';
 import { ConversationStorage, type Persistence } from './storage.js';
 import { claimNamespace, type ClaimedNamespace } from './namespace.js';
 import { applyTheme, type ThemeConfig } from './theme.js';
@@ -314,9 +315,9 @@ export class Widget {
     }
 
     // Auto-open — popup mode only
-    if (!this.isInline && this.config.autoOpen !== undefined && this.config.autoOpen !== false) {
-      const delay = typeof this.config.autoOpen === 'number' ? this.config.autoOpen : 0;
-      this.autoOpenTimer = setTimeout(() => this.open(), delay);
+    const autoOpen = this.config.autoOpen === true ? 0 : timerDelay(this.config.autoOpen);
+    if (!this.isInline && autoOpen !== undefined) {
+      this.autoOpenTimer = setTimeout(() => this.open(), autoOpen);
     }
   }
 
