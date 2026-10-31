@@ -79,6 +79,9 @@ export interface IngestConfig {
     store: VectorStore;
     manifest: KeyValueStore;
     metadata?: (doc: ExtractedDoc) => Record<string, MetadataValue>;
+    contextualize?: false | {
+        provider: ProviderConfig | AIProvider;
+    };
     dryRun?: boolean;
     force?: boolean;
     prune?: boolean;
@@ -122,6 +125,11 @@ export interface IngestStats {
     pruned: number;
     chunks: number;
     embedded: number;
+    contextualized: number;
+    modelTokens: {
+        inputTokens: number;
+        outputTokens: number;
+    };
     errors: string[];
     pruneSkipped?: string;
 }
